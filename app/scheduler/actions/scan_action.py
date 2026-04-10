@@ -1,3 +1,4 @@
+import os
 import requests
 from time import time
 from typing import Literal
@@ -9,6 +10,8 @@ from app.scheduler.actions.template_action import ActionPhase, TemplateAction
 
 
 log = TaskLoggerAdapter(base_log, {"tag": "ScanAction"})
+
+DEFAULT_SCAN_ENDPOINT = "http://127.0.0.1:8000/scan"
 
 
 ScanPhase = ActionPhase
@@ -32,6 +35,7 @@ class ScanAction(TemplateAction[ScanParam]):
 
     def __init__(self):
         super().__init__(ScanParam)
+        self._scan_endpoint = os.getenv("SCHEDULER_SCAN_URL", DEFAULT_SCAN_ENDPOINT)
 
     @property
     def callback_type(self) -> str:
@@ -64,7 +68,7 @@ class ScanAction(TemplateAction[ScanParam]):
                 f"Posting phase '{phase.name}' with request_id={request_id}, group_id={group_id}"
             )
             response = requests.post(
-                "http://192.168.112.166:8000/scan",
+                self._scan_endpoint,
                 timeout=5,
                 json={
                     "background": True,

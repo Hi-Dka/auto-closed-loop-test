@@ -1,5 +1,6 @@
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 
@@ -15,6 +16,10 @@ from app.scheduler.network.router import (
 
 log = TaskLoggerAdapter(base_log, {"tag": "SchedulerApp"})
 
+DEFAULT_SCHEDULER_CONFIG_PATH = (
+    Path(__file__).resolve().parents[2] / "config" / "scheduler" / "flows.yaml"
+)
+
 
 def create_scheduler_app(config_path: str) -> FastAPI:
     @asynccontextmanager
@@ -26,6 +31,7 @@ def create_scheduler_app(config_path: str) -> FastAPI:
             set_callback_target(scheduler)
             fastapi_app.state.scheduler_running = False
             fastapi_app.state.scheduler_task = None
+            fastapi_app.state.scheduler_last_outcome = "idle"
 
             yield
 
@@ -48,7 +54,7 @@ def create_scheduler_app(config_path: str) -> FastAPI:
 scheduler_app = create_scheduler_app(
     config_path=os.getenv(
         "SCHEDULER_CONFIG_PATH",
-        "/home/hidka/Project/Auto-Closed-Loop-Test/config/scheduler/flows.yaml",
+        str(DEFAULT_SCHEDULER_CONFIG_PATH),
     )
 )
 

@@ -106,23 +106,16 @@ class CompletionPolicy:
         )
 
 
-class BaseAction(ABC, Generic[T]):
+class CallbackStore:
+    """Owns callback queue lifecycle: normalize, dedupe, match, wait, and cleanup."""
 
-    def __init__(self, param_model: type[T]):
-        self._callback_queue: deque[dict[str, Any]] = deque()
-        self._callback_condition = threading.Condition()
-        self._seen_callback_keys: dict[str, float] = {}
-        self._callback_ttl_seconds = 300.0
-        self._param_model = param_model
-        self._params: T
+    def __init__(self, ttl_seconds: float = 300.0):
+        self._queue: deque[dict[str, Any]] = deque()
+        self._condition = threading.Condition()
+        self._seen_keys: dict[str, float] = {}
+        self._ttl_seconds = ttl_seconds
 
-    @abstractmethod
-    def run(self) -> bool: ...
-
-    def parse_params(self, params: dict[str, Any]) -> None:
-        self._params = self._param_model(**params)
-
-    def _wait_for_callback(
+    def wait_for_one(
         self,
         timeout: float = 30.0,
         callback_type: Optional[str] = None,
@@ -132,7 +125,7 @@ class BaseAction(ABC, Generic[T]):
     ) -> dict[str, Any]:
         deadline = monotonic() + timeout
 
-        with self._callback_condition:
+        with self._condition:
             while True:
                 self._cleanup_expired_locked(now=time())
                 match_index = self._find_match_index(
@@ -142,17 +135,16 @@ class BaseAction(ABC, Generic[T]):
                     predicate=predicate,
                 )
                 if match_index is not None:
-                    callback_data = self._callback_queue[match_index]
-                    del self._callback_queue[match_index]
+                    callback_data = self._queue[match_index]
+                    del self._queue[match_index]
                     return callback_data
 
                 remaining = deadline - monotonic()
                 if remaining <= 0:
                     raise TimeoutError("Timed out waiting for callback data.")
+                self._condition.wait(timeout=remaining)
 
-                self._callback_condition.wait(timeout=remaining)
-
-    def _wait_for_callbacks(
+    def wait_for_many(
         self,
         expected_count: int,
         timeout: float = 30.0,
@@ -171,7 +163,7 @@ class BaseAction(ABC, Generic[T]):
             if remaining <= 0:
                 raise TimeoutError("Timed out waiting for callback data.")
             callbacks.append(
-                self._wait_for_callback(
+                self.wait_for_one(
                     timeout=remaining,
                     callback_type=callback_type,
                     request_id=request_id,
@@ -179,277 +171,29 @@ class BaseAction(ABC, Generic[T]):
                     predicate=predicate,
                 )
             )
-
         return callbacks
 
-    def _wait_for_callbacks_by_policy(
-        self,
-        policy: CompletionPolicy,
-        timeout: float = 30.0,
-        callback_type: Optional[str] = None,
-        group_id: Optional[str] = None,
-    ) -> list[dict[str, Any]]:
-        deadline = monotonic() + timeout
-
-        base_kwargs: dict[str, Any] = {
-            "callback_type": callback_type,
-            "group_id": group_id,
-        }
-        match_policy: MatchPolicy = (
-            policy.match if policy.match is not None else MatchPolicy.no_filter()
-        )
-
-        request_ids: list[str] | None = (
-            match_policy.request_ids if match_policy.kind == "by_request_ids" else None
-        )
-
-        request_id_set: set[str] | None = set(request_ids) if request_ids else None
-
-        # Helper to combine base kwargs with any additional overrides for specific calls
-        def _make_kwargs(**overrides: Any) -> dict[str, Any]:
-            kwargs = dict(base_kwargs)
-            kwargs.update(overrides)
-            return kwargs
-
-        if policy.count.kind == "any_one":
-            if request_id_set is not None:
-                callback = self._wait_for_callback(
-                    timeout=timeout,
-                    predicate=lambda cb: cb.get("request_id") in request_id_set,
-                    **_make_kwargs(),
-                )
-                return [callback]
-
-            return [
-                self._wait_for_callback(
-                    timeout=timeout,
-                    **_make_kwargs(),
-                )
-            ]
-
-        if policy.count.kind == "exactly":
-            if not policy.count.count or policy.count.count <= 0:
-                raise ValueError("CountPolicy.exactly requires count > 0")
-
-            if request_id_set is not None and request_ids is not None:
-                target_count = policy.count.count
-                counts_by_id: dict[str, int] = {req_id: 0 for req_id in request_ids}
-                callbacks: list[dict[str, Any]] = []
-                while True:
-                    remaining = deadline - monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError("Timed out waiting for callback data.")
-
-                    callback = self._wait_for_callback(
-                        timeout=remaining,
-                        predicate=lambda cb: cb.get("request_id") in request_id_set,
-                        **_make_kwargs(),
-                    )
-                    request_id = callback.get("request_id")
-                    if (
-                        request_id in counts_by_id
-                        and counts_by_id[request_id] < target_count
-                    ):
-                        counts_by_id[request_id] += 1
-                        callbacks.append(callback)
-
-                    if all(count >= target_count for count in counts_by_id.values()):
-                        return callbacks
-
-            return self._wait_for_callbacks(
-                expected_count=policy.count.count,
-                timeout=timeout,
-                **_make_kwargs(),
-            )
-
-        if policy.count.kind == "at_least":
-            if not policy.count.count or policy.count.count <= 0:
-                raise ValueError("CountPolicy.at_least requires count > 0")
-
-            if request_id_set is not None and request_ids is not None:
-                target_count = policy.count.count
-                counts_by_id: dict[str, int] = {req_id: 0 for req_id in request_ids}
-                callbacks: list[dict[str, Any]] = []
-                while True:
-                    remaining = deadline - monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError("Timed out waiting for callback data.")
-
-                    callback = self._wait_for_callback(
-                        timeout=remaining,
-                        predicate=lambda cb: cb.get("request_id") in request_id_set,
-                        **_make_kwargs(),
-                    )
-                    callbacks.append(callback)
-
-                    request_id = callback.get("request_id")
-                    if request_id in counts_by_id:
-                        counts_by_id[request_id] += 1
-
-                    if all(count >= target_count for count in counts_by_id.values()):
-                        callbacks.extend(
-                            self._drain_matching_callbacks(
-                                predicate=lambda cb: cb.get("request_id")
-                                in request_id_set,
-                                **_make_kwargs(),
-                            )
-                        )
-                        return callbacks
-
-            callbacks = self._wait_for_callbacks(
-                expected_count=policy.count.count,
-                timeout=timeout,
-                **_make_kwargs(),
-            )
-            callbacks.extend(self._drain_matching_callbacks(**_make_kwargs()))
-            return callbacks
-
-        if policy.count.kind == "until":
-            if policy.count.stop_when is None:
-                raise ValueError("CountPolicy.until requires stop_when condition")
-
-            if request_id_set is not None and request_ids is not None:
-                done_ids: set[str] = set()
-                callbacks: list[dict[str, Any]] = []
-                while True:
-                    remaining = deadline - monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError("Timed out waiting for callback data.")
-
-                    callback = self._wait_for_callback(
-                        timeout=remaining,
-                        predicate=lambda cb: cb.get("request_id") in request_id_set,
-                        **_make_kwargs(),
-                    )
-                    callbacks.append(callback)
-
-                    request_id = callback.get("request_id")
-                    if request_id in request_id_set and policy.count.stop_when(
-                        callback
-                    ):
-                        done_ids.add(request_id)
-
-                    if len(done_ids) == len(request_id_set):
-                        return callbacks
-
-            callbacks: list[dict[str, Any]] = []
-            while True:
-                remaining = deadline - monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("Timed out waiting for callback data.")
-                callback = self._wait_for_callback(
-                    timeout=remaining,
-                    **_make_kwargs(),
-                )
-                callbacks.append(callback)
-                if policy.count.stop_when(callback):
-                    return callbacks
-
-        if policy.count.kind == "time_window_collect":
-            if not policy.count.window_seconds or policy.count.window_seconds <= 0:
-                raise ValueError(
-                    "CountPolicy.time_window_collect requires window_seconds > 0"
-                )
-
-            if request_id_set is not None and request_ids is not None:
-                window_seconds = policy.count.window_seconds
-                callbacks: list[dict[str, Any]] = []
-                window_start_by_id: dict[str, float] = {}
-
-                while True:
-                    remaining = deadline - monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError("Timed out waiting for callback data.")
-
-                    all_windows_expired = True
-                    for req_id in request_ids:
-                        if req_id not in window_start_by_id:
-                            all_windows_expired = False
-                            break
-                        window_end = window_start_by_id[req_id] + window_seconds
-                        if monotonic() < window_end:
-                            all_windows_expired = False
-                            break
-                    if all_windows_expired:
-                        return callbacks
-
-                    callback = self._wait_for_callback(
-                        timeout=remaining,
-                        predicate=lambda cb: cb.get("request_id") in request_id_set,
-                        **_make_kwargs(),
-                    )
-                    callbacks.append(callback)
-                    request_id = callback.get("request_id")
-
-                    if request_id and request_id not in window_start_by_id:
-                        window_start_by_id[request_id] = monotonic()
-
-            first = self._wait_for_callback(
-                timeout=timeout,
-                **_make_kwargs(),
-            )
-            callbacks = [first]
-            window_deadline = monotonic() + policy.count.window_seconds
-
-            while True:
-                remaining = window_deadline - monotonic()
-                if remaining <= 0:
-                    break
-                callback = self._pop_matching_callback(**_make_kwargs())
-                if callback is None:
-                    with self._callback_condition:
-                        self._callback_condition.wait(timeout=remaining)
-                    continue
-                callbacks.append(callback)
-
-            return callbacks
-
-        raise ValueError(f"Unsupported count policy kind: {policy.count.kind}")
-
-    def notify_callback(
-        self, data: dict[str, Any], callback_type: Optional[str] = None
-    ) -> None:
+    def notify(self, data: dict[str, Any], callback_type: Optional[str] = None) -> None:
         callback_data = self._normalize_callback_data(data, callback_type)
         dedupe_key = self._build_dedupe_key(callback_data)
         now = time()
 
-        with self._callback_condition:
+        with self._condition:
             self._cleanup_expired_locked(now=now)
-            if dedupe_key in self._seen_callback_keys:
+            if dedupe_key in self._seen_keys:
                 return
+            self._seen_keys[dedupe_key] = now
+            self._queue.append(callback_data)
+            self._condition.notify_all()
 
-            self._seen_callback_keys[dedupe_key] = now
-            self._callback_queue.append(callback_data)
-            self._callback_condition.notify_all()
-
-    def _find_match_index(
-        self,
-        callback_type: Optional[str],
-        request_id: Optional[str],
-        group_id: Optional[str],
-        predicate: Optional[Callable[[dict[str, Any]], bool]],
-    ) -> Optional[int]:
-        for index, callback_data in enumerate(self._callback_queue):
-            if callback_type and callback_data.get("callback_type") != callback_type:
-                continue
-            if request_id and callback_data.get("request_id") != request_id:
-                continue
-            if group_id and callback_data.get("group_id") != group_id:
-                continue
-            if predicate and not predicate(callback_data):
-                continue
-            return index
-
-        return None
-
-    def _pop_matching_callback(
+    def pop_matching(
         self,
         callback_type: Optional[str] = None,
         request_id: Optional[str] = None,
         group_id: Optional[str] = None,
         predicate: Optional[Callable[[dict[str, Any]], bool]] = None,
     ) -> Optional[dict[str, Any]]:
-        with self._callback_condition:
+        with self._condition:
             self._cleanup_expired_locked(now=time())
             match_index = self._find_match_index(
                 callback_type=callback_type,
@@ -460,11 +204,11 @@ class BaseAction(ABC, Generic[T]):
             if match_index is None:
                 return None
 
-            callback_data = self._callback_queue[match_index]
-            del self._callback_queue[match_index]
+            callback_data = self._queue[match_index]
+            del self._queue[match_index]
             return callback_data
 
-    def _drain_matching_callbacks(
+    def drain_matching(
         self,
         callback_type: Optional[str] = None,
         request_id: Optional[str] = None,
@@ -473,42 +217,54 @@ class BaseAction(ABC, Generic[T]):
     ) -> list[dict[str, Any]]:
         drained: list[dict[str, Any]] = []
         while True:
-            callback = self._pop_matching_callback(
+            callback = self.pop_matching(
                 callback_type=callback_type,
                 request_id=request_id,
                 group_id=group_id,
                 predicate=predicate,
             )
             if callback is None:
-                break
+                return drained
             drained.append(callback)
-        return drained
+
+    def wait_on_condition(self, timeout: float) -> None:
+        with self._condition:
+            self._condition.wait(timeout=timeout)
+
+    def _find_match_index(
+        self,
+        callback_type: Optional[str],
+        request_id: Optional[str],
+        group_id: Optional[str],
+        predicate: Optional[Callable[[dict[str, Any]], bool]],
+    ) -> Optional[int]:
+        for index, callback_data in enumerate(self._queue):
+            if callback_type and callback_data.get("callback_type") != callback_type:
+                continue
+            if request_id and callback_data.get("request_id") != request_id:
+                continue
+            if group_id and callback_data.get("group_id") != group_id:
+                continue
+            if predicate and not predicate(callback_data):
+                continue
+            return index
+        return None
 
     def _normalize_callback_data(
         self, data: dict[str, Any], callback_type: Optional[str]
     ) -> dict[str, Any]:
         callback_data = dict(data)
-
-        normalized_callback_type = (
+        callback_data["callback_type"] = (
             callback_type
             or callback_data.get("callback_type")
             or callback_data.get("type")
             or "unknown"
         )
-        normalized_status = callback_data.get("status", "unknown")
-        normalized_payload = callback_data.get("payload", dict(callback_data))
-        normalized_ts = callback_data.get("ts", time())
-
-        callback_data["callback_type"] = normalized_callback_type
-        callback_data["status"] = normalized_status
-        callback_data["payload"] = normalized_payload
-        callback_data["ts"] = normalized_ts
-
-        # Ensure request_id and group_id keys exist for easier processing later,
-        # even if they are None
+        callback_data["status"] = callback_data.get("status", "unknown")
+        callback_data["payload"] = callback_data.get("payload", dict(callback_data))
+        callback_data["ts"] = callback_data.get("ts", time())
         callback_data.setdefault("request_id", None)
         callback_data.setdefault("group_id", None)
-
         return callback_data
 
     def _build_dedupe_key(self, callback_data: dict[str, Any]) -> str:
@@ -527,18 +283,416 @@ class BaseAction(ABC, Generic[T]):
         return f"fallback:{request_id}:{callback_type}:{status}:{ts}"
 
     def _cleanup_expired_locked(self, now: float) -> None:
-        expire_before = now - self._callback_ttl_seconds
+        expire_before = now - self._ttl_seconds
 
-        self._callback_queue = deque(
+        self._queue = deque(
             callback
-            for callback in self._callback_queue
+            for callback in self._queue
             if float(callback.get("ts", now)) >= expire_before
         )
 
         expired_keys = [
-            key
-            for key, seen_ts in self._seen_callback_keys.items()
-            if seen_ts < expire_before
+            key for key, seen_ts in self._seen_keys.items() if seen_ts < expire_before
         ]
         for key in expired_keys:
-            del self._seen_callback_keys[key]
+            del self._seen_keys[key]
+
+
+class CallbackPolicyExecutor:
+    """Executes CompletionPolicy against a callback store."""
+
+    def __init__(self, callback_store: CallbackStore):
+        self._store = callback_store
+
+    def wait_by_policy(
+        self,
+        policy: CompletionPolicy,
+        timeout: float = 30.0,
+        callback_type: Optional[str] = None,
+        group_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        base_kwargs: dict[str, Any] = {
+            "callback_type": callback_type,
+            "group_id": group_id,
+        }
+        match_policy: MatchPolicy = (
+            policy.match if policy.match is not None else MatchPolicy.no_filter()
+        )
+        request_ids: list[str] | None = (
+            match_policy.request_ids if match_policy.kind == "by_request_ids" else None
+        )
+        request_id_set: set[str] | None = set(request_ids) if request_ids else None
+
+        if policy.count.kind == "any_one":
+            return self._handle_any_one(
+                timeout=timeout,
+                base_kwargs=base_kwargs,
+                request_id_set=request_id_set,
+            )
+
+        if policy.count.kind == "exactly":
+            return self._handle_exactly(
+                policy=policy,
+                timeout=timeout,
+                base_kwargs=base_kwargs,
+                request_ids=request_ids,
+                request_id_set=request_id_set,
+            )
+
+        if policy.count.kind == "at_least":
+            return self._handle_at_least(
+                policy=policy,
+                timeout=timeout,
+                base_kwargs=base_kwargs,
+                request_ids=request_ids,
+                request_id_set=request_id_set,
+            )
+
+        if policy.count.kind == "until":
+            return self._handle_until(
+                policy=policy,
+                timeout=timeout,
+                base_kwargs=base_kwargs,
+                request_ids=request_ids,
+                request_id_set=request_id_set,
+            )
+
+        if policy.count.kind == "time_window_collect":
+            return self._handle_time_window_collect(
+                policy=policy,
+                timeout=timeout,
+                base_kwargs=base_kwargs,
+                request_ids=request_ids,
+                request_id_set=request_id_set,
+            )
+
+        raise ValueError(f"Unsupported count policy kind: {policy.count.kind}")
+
+    def _make_kwargs(
+        self, base_kwargs: dict[str, Any], **overrides: Any
+    ) -> dict[str, Any]:
+        kwargs = dict(base_kwargs)
+        kwargs.update(overrides)
+        return kwargs
+
+    def _handle_any_one(
+        self,
+        timeout: float,
+        base_kwargs: dict[str, Any],
+        request_id_set: Optional[set[str]],
+    ) -> list[dict[str, Any]]:
+        if request_id_set is not None:
+            callback = self._store.wait_for_one(
+                timeout=timeout,
+                predicate=lambda cb: cb.get("request_id") in request_id_set,
+                **self._make_kwargs(base_kwargs),
+            )
+            return [callback]
+        return [
+            self._store.wait_for_one(
+                timeout=timeout,
+                **self._make_kwargs(base_kwargs),
+            )
+        ]
+
+    def _handle_exactly(
+        self,
+        policy: CompletionPolicy,
+        timeout: float,
+        base_kwargs: dict[str, Any],
+        request_ids: Optional[list[str]],
+        request_id_set: Optional[set[str]],
+    ) -> list[dict[str, Any]]:
+        if not policy.count.count or policy.count.count <= 0:
+            raise ValueError("CountPolicy.exactly requires count > 0")
+
+        if request_id_set is not None and request_ids is not None:
+            deadline = monotonic() + timeout
+            target_count = policy.count.count
+            counts_by_id: dict[str, int] = {req_id: 0 for req_id in request_ids}
+            callbacks: list[dict[str, Any]] = []
+            while True:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Timed out waiting for callback data.")
+
+                callback = self._store.wait_for_one(
+                    timeout=remaining,
+                    predicate=lambda cb: cb.get("request_id") in request_id_set,
+                    **self._make_kwargs(base_kwargs),
+                )
+                request_id = callback.get("request_id")
+                if (
+                    request_id in counts_by_id
+                    and counts_by_id[request_id] < target_count
+                ):
+                    counts_by_id[request_id] += 1
+                    callbacks.append(callback)
+
+                if all(count >= target_count for count in counts_by_id.values()):
+                    return callbacks
+
+        return self._store.wait_for_many(
+            expected_count=policy.count.count,
+            timeout=timeout,
+            **self._make_kwargs(base_kwargs),
+        )
+
+    def _handle_at_least(
+        self,
+        policy: CompletionPolicy,
+        timeout: float,
+        base_kwargs: dict[str, Any],
+        request_ids: Optional[list[str]],
+        request_id_set: Optional[set[str]],
+    ) -> list[dict[str, Any]]:
+        if not policy.count.count or policy.count.count <= 0:
+            raise ValueError("CountPolicy.at_least requires count > 0")
+
+        if request_id_set is not None and request_ids is not None:
+            deadline = monotonic() + timeout
+            target_count = policy.count.count
+            counts_by_id: dict[str, int] = {req_id: 0 for req_id in request_ids}
+            callbacks: list[dict[str, Any]] = []
+            while True:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Timed out waiting for callback data.")
+
+                callback = self._store.wait_for_one(
+                    timeout=remaining,
+                    predicate=lambda cb: cb.get("request_id") in request_id_set,
+                    **self._make_kwargs(base_kwargs),
+                )
+                callbacks.append(callback)
+
+                request_id = callback.get("request_id")
+                if request_id in counts_by_id:
+                    counts_by_id[request_id] += 1
+
+                if all(count >= target_count for count in counts_by_id.values()):
+                    callbacks.extend(
+                        self._store.drain_matching(
+                            predicate=lambda cb: cb.get("request_id") in request_id_set,
+                            **self._make_kwargs(base_kwargs),
+                        )
+                    )
+                    return callbacks
+
+        callbacks = self._store.wait_for_many(
+            expected_count=policy.count.count,
+            timeout=timeout,
+            **self._make_kwargs(base_kwargs),
+        )
+        callbacks.extend(self._store.drain_matching(**self._make_kwargs(base_kwargs)))
+        return callbacks
+
+    def _handle_until(
+        self,
+        policy: CompletionPolicy,
+        timeout: float,
+        base_kwargs: dict[str, Any],
+        request_ids: Optional[list[str]],
+        request_id_set: Optional[set[str]],
+    ) -> list[dict[str, Any]]:
+        if policy.count.stop_when is None:
+            raise ValueError("CountPolicy.until requires stop_when condition")
+
+        stop_when = policy.count.stop_when
+
+        if request_id_set is not None and request_ids is not None:
+            deadline = monotonic() + timeout
+            done_ids: set[str] = set()
+            callbacks: list[dict[str, Any]] = []
+            while True:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Timed out waiting for callback data.")
+
+                callback = self._store.wait_for_one(
+                    timeout=remaining,
+                    predicate=lambda cb: cb.get("request_id") in request_id_set,
+                    **self._make_kwargs(base_kwargs),
+                )
+                callbacks.append(callback)
+
+                request_id = callback.get("request_id")
+                if request_id in request_id_set and stop_when(callback):
+                    done_ids.add(request_id)
+
+                if len(done_ids) == len(request_id_set):
+                    return callbacks
+
+        deadline = monotonic() + timeout
+        callbacks: list[dict[str, Any]] = []
+        while True:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Timed out waiting for callback data.")
+            callback = self._store.wait_for_one(
+                timeout=remaining,
+                **self._make_kwargs(base_kwargs),
+            )
+            callbacks.append(callback)
+            if stop_when(callback):
+                return callbacks
+
+    def _handle_time_window_collect(
+        self,
+        policy: CompletionPolicy,
+        timeout: float,
+        base_kwargs: dict[str, Any],
+        request_ids: Optional[list[str]],
+        request_id_set: Optional[set[str]],
+    ) -> list[dict[str, Any]]:
+        if not policy.count.window_seconds or policy.count.window_seconds <= 0:
+            raise ValueError(
+                "CountPolicy.time_window_collect requires window_seconds > 0"
+            )
+
+        window_seconds = policy.count.window_seconds
+
+        if request_id_set is not None and request_ids is not None:
+            deadline = monotonic() + timeout
+            callbacks: list[dict[str, Any]] = []
+            window_start_by_id: dict[str, float] = {}
+
+            while True:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Timed out waiting for callback data.")
+
+                all_windows_expired = True
+                for req_id in request_ids:
+                    if req_id not in window_start_by_id:
+                        all_windows_expired = False
+                        break
+                    window_end = window_start_by_id[req_id] + window_seconds
+                    if monotonic() < window_end:
+                        all_windows_expired = False
+                        break
+                if all_windows_expired:
+                    return callbacks
+
+                callback = self._store.wait_for_one(
+                    timeout=remaining,
+                    predicate=lambda cb: cb.get("request_id") in request_id_set,
+                    **self._make_kwargs(base_kwargs),
+                )
+                callbacks.append(callback)
+                request_id = callback.get("request_id")
+                if request_id and request_id not in window_start_by_id:
+                    window_start_by_id[request_id] = monotonic()
+
+        first = self._store.wait_for_one(
+            timeout=timeout, **self._make_kwargs(base_kwargs)
+        )
+        callbacks = [first]
+        window_deadline = monotonic() + window_seconds
+
+        while True:
+            remaining = window_deadline - monotonic()
+            if remaining <= 0:
+                break
+            callback = self._store.pop_matching(**self._make_kwargs(base_kwargs))
+            if callback is None:
+                self._store.wait_on_condition(timeout=remaining)
+                continue
+            callbacks.append(callback)
+        return callbacks
+
+
+class BaseAction(ABC, Generic[T]):
+
+    def __init__(self, param_model: type[T]):
+        self._param_model = param_model
+        self._params: T
+        self._callback_store = CallbackStore(ttl_seconds=300.0)
+        self._policy_executor = CallbackPolicyExecutor(self._callback_store)
+
+    @abstractmethod
+    def run(self) -> bool: ...
+
+    def parse_params(self, params: dict[str, Any]) -> None:
+        self._params = self._param_model(**params)
+
+    def _wait_for_callback(
+        self,
+        timeout: float = 30.0,
+        callback_type: Optional[str] = None,
+        request_id: Optional[str] = None,
+        group_id: Optional[str] = None,
+        predicate: Optional[Callable[[dict[str, Any]], bool]] = None,
+    ) -> dict[str, Any]:
+        return self._callback_store.wait_for_one(
+            timeout=timeout,
+            callback_type=callback_type,
+            request_id=request_id,
+            group_id=group_id,
+            predicate=predicate,
+        )
+
+    def _wait_for_callbacks(
+        self,
+        expected_count: int,
+        timeout: float = 30.0,
+        callback_type: Optional[str] = None,
+        request_id: Optional[str] = None,
+        group_id: Optional[str] = None,
+        predicate: Optional[Callable[[dict[str, Any]], bool]] = None,
+    ) -> list[dict[str, Any]]:
+        return self._callback_store.wait_for_many(
+            expected_count=expected_count,
+            timeout=timeout,
+            callback_type=callback_type,
+            request_id=request_id,
+            group_id=group_id,
+            predicate=predicate,
+        )
+
+    def _wait_for_callbacks_by_policy(
+        self,
+        policy: CompletionPolicy,
+        timeout: float = 30.0,
+        callback_type: Optional[str] = None,
+        group_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        return self._policy_executor.wait_by_policy(
+            policy=policy,
+            timeout=timeout,
+            callback_type=callback_type,
+            group_id=group_id,
+        )
+
+    def notify_callback(
+        self, data: dict[str, Any], callback_type: Optional[str] = None
+    ) -> None:
+        self._callback_store.notify(data=data, callback_type=callback_type)
+
+    def _pop_matching_callback(
+        self,
+        callback_type: Optional[str] = None,
+        request_id: Optional[str] = None,
+        group_id: Optional[str] = None,
+        predicate: Optional[Callable[[dict[str, Any]], bool]] = None,
+    ) -> Optional[dict[str, Any]]:
+        return self._callback_store.pop_matching(
+            callback_type=callback_type,
+            request_id=request_id,
+            group_id=group_id,
+            predicate=predicate,
+        )
+
+    def _drain_matching_callbacks(
+        self,
+        callback_type: Optional[str] = None,
+        request_id: Optional[str] = None,
+        group_id: Optional[str] = None,
+        predicate: Optional[Callable[[dict[str, Any]], bool]] = None,
+    ) -> list[dict[str, Any]]:
+        return self._callback_store.drain_matching(
+            callback_type=callback_type,
+            request_id=request_id,
+            group_id=group_id,
+            predicate=predicate,
+        )

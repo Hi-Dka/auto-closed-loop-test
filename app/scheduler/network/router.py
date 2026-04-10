@@ -20,9 +20,14 @@ async def _run_scheduler_pipeline(request: Request):
     try:
         await asyncio.to_thread(scheduler.initialize)
         log.info("Suite configuration loaded, starting pipeline execution")
-        await asyncio.to_thread(scheduler.run)
-        log.info("Scheduler pipeline completed")
+        run_ok = await asyncio.to_thread(scheduler.run)
+        app.state.scheduler_last_outcome = "success" if run_ok else "failed"
+        if run_ok:
+            log.info("Scheduler pipeline completed")
+        else:
+            log.warning("Scheduler pipeline finished with failure")
     except (RuntimeError, ValueError, FileNotFoundError, TimeoutError) as e:
+        app.state.scheduler_last_outcome = "failed"
         log.error(f"Scheduler execution failed: {e}")
     finally:
         app.state.scheduler_running = False
@@ -40,6 +45,7 @@ async def start_scheduler(request: Request):
         return {"status": "already_running", "message": "Scheduler is already running"}
 
     app.state.scheduler_running = True
+    app.state.scheduler_last_outcome = "running"
     log.info("Scheduler start requested")
     app.state.scheduler_task = asyncio.create_task(_run_scheduler_pipeline(request))
 
@@ -63,8 +69,19 @@ async def get_scheduler_status(request: Request):
         else {}
     )
 
+    run_status = (
+        status.get("run_status", "unknown") if isinstance(status, dict) else "unknown"
+    )
+    if app.state.scheduler_running:
+        scheduler_status = "running"
+    elif run_status in {"success", "failed", "initialized", "idle"}:
+        scheduler_status = run_status
+    else:
+        scheduler_status = "stopped"
+
     return {
-        "scheduler_status": "running" if app.state.scheduler_running else "stopped",
+        "scheduler_status": scheduler_status,
+        "last_outcome": getattr(app.state, "scheduler_last_outcome", "unknown"),
         "flow_status": status,
     }
 
