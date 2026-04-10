@@ -1,0 +1,19 @@
+# --- Web 框架与服务器 ---
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
+
+# --- 图形处理 ---
+pillow
+
+# --- 网络请求 ---
+requests
+
+# --- 开发工具 ---
+pip-tools
+build
+watchfiles
+
+# --- 格式处理 ---
+PyYAML

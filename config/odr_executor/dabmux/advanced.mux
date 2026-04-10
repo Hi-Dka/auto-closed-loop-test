@@ -1,0 +1,146 @@
+general {
+    dabmode 1
+    nbframes 0
+    syslog false
+    writescca false
+    tist false
+    managementport 12720
+}
+
+remotecontrol {
+    telnetport 12721
+    zmqendpoint "tcp://lo:12722"
+}
+
+ensemble {
+    id 0x4fff
+    ecc 0xA0
+    local-time-offset auto
+    international-table 1
+    reconfig-counter hash
+    label "OpenDigitalRadio"
+    shortlabel "ODR"
+    announcements {
+        traffic_announcement {
+            cluster 1
+            flags {
+                Traffic true
+            }
+
+            subchannel sub-ta
+        }
+    }
+}
+
+services {
+    srv-music {
+        id 0x4daa
+        label "music"
+        shortlabel "mu"
+        pty 4
+        pty-sd static
+        language 0
+        announcements {
+            Alarm false
+            Traffic true
+            Travel false
+            Warning false
+            News false
+            Weather false
+            Event false
+            Special false
+            ProgrammeInfo false
+            Sports false
+            Finance false
+            clusters "1,2"
+        }
+    }
+}
+
+subchannels {
+    sub-ri {
+        type dabplus
+        bitrate 64
+        id 2
+        protection 3
+        inputproto zmq
+        inputuri "tcp://127.0.0.1:9000"
+        zmq-buffer 120
+        zmq-prebuffering 100
+        encryption false
+        ;secret-key "keys/mux.sec"
+        ;public-key "keys/mux.pub"
+        ;encoder-key "keys/encoder1.pub"
+        ; key pairs can be generated using the zmqinput-keygen tool.
+    }
+    sub-ta {
+        type dabplus
+        bitrate 64
+        id 1
+        protection 3
+        inputproto zmq
+        inputuri "tcp://127.0.0.1:9001"
+        zmq-buffer 40
+        zmq-prebuffering 20
+        encryption false
+        ;secret-key "keys/mux.sec"
+        ;public-key "keys/mux.pub"
+        ;encoder-key "keys/encoder1.pub"
+        ; key pairs can be generated using the zmqinput-keygen tool.
+    }
+    ;   sub-data {
+    ;       id 6
+    ;       type enhancedpacket
+    ;       load_entire_file true
+    ;       inputfile "./epg.dat"
+    ;       protection 1
+    ;       bitrate 32
+    ;   }
+}
+
+components {
+    comp-music {
+        ; specifies audio -or- packet type, defaults to zero when not given
+        ; audio: foreground=0, background=1, multi-channel=2
+        ; data: unspecified=0, TMC=1, EWS=2, ITTS=3, paging=4, TDC=5, IP=59, MOT=60, proprietary=61
+        type 0
+
+        ; According to specification, you should not define component labels if
+        ; the service is only used in one component. The service label is sufficient
+        ; in that case.
+        ;label "funk"
+        ;shortlabel "fu"
+        service srv-music
+        subchannel sub-ri
+
+        ; FIG 0/13 user application was previously configured using the figtype setting, which
+        ; allowed only a single user application.
+        ; Now more than one user application can be defined per component, using the
+        ; Using the 'user-applications' section, several can be defined per component.
+        ; Do not use both figtype and user-applications.
+
+        ; If both slideshow (TS 101 499) and SPI (TS 102 818) are carried in PAD, the following
+        ; needs to be set for FIG 0/13 to be transmitted correctly.
+        ; The same section is also applicable to packet services.
+        user-applications {
+            ; Add uaType 0x2 with X-PAD App Type = 12 and empty user application data
+            userapp "slideshow"
+
+            ; Add uaType 0x7 with X-PAD App Type = 16 and user application data = "Basic profile"
+            ;userapp "spi"
+
+            ; Broadcast website, add uaType 0x3 and user application data
+            ; 0x01 "basic integrated receiver profile" and
+            ; 0xFF "unrestricted profile"
+            ; Only for packet-mode, not X-PAD.
+            ; userapp "website"
+
+            ; Journaline, adds uaType 0x44a and user application data 0x00 0x00 (TS 102 979 Clause 8.1.2)
+            ; userapp "journaline"
+        }
+    }
+}
+
+outputs {
+    stdout "fifo:///tmp/fifos/mux2mod.fifo?type=raw"
+}

@@ -1,0 +1,4 @@
+action_class: "app.scheduler.actions.scan_action.ScanAction"
+callback_type: "scan"
+config:
+  time_out: 60

@@ -1,0 +1,58 @@
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
+from app.scheduler.core.logger import base_log, TaskLoggerAdapter
+from app.scheduler.engine.master import MasterScheduler
+from app.scheduler.network.router import (
+    clear_callback_target,
+    control_router,
+    router as callback_router,
+    set_callback_target,
+)
+
+
+log = TaskLoggerAdapter(base_log, {"tag": "SchedulerApp"})
+
+
+def create_scheduler_app(config_path: str) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(fastapi_app: FastAPI):
+        log.info("Starting Scheduler API...")
+        try:
+            scheduler = MasterScheduler(config_path=config_path)
+            fastapi_app.state.scheduler = scheduler
+            set_callback_target(scheduler)
+            fastapi_app.state.scheduler_running = False
+            fastapi_app.state.scheduler_task = None
+
+            yield
+
+        finally:
+            clear_callback_target()
+            log.info("Scheduler API stopped.")
+
+    app_instance = FastAPI(
+        lifespan=lifespan,
+        title="Scheduler Callback API",
+        version="1.0.0",
+        description="API for scheduler callback ingestion",
+    )
+    app_instance.include_router(callback_router)
+    app_instance.include_router(control_router)
+
+    return app_instance
+
+
+scheduler_app = create_scheduler_app(
+    config_path=os.getenv(
+        "SCHEDULER_CONFIG_PATH",
+        "/home/hidka/Project/Auto-Closed-Loop-Test/config/scheduler/flows.yaml",
+    )
+)
+
+# if __name__ == "__main__":
+#     import uvicorn
+
+#     uvicorn.run(scheduler_app, host="localhost", port=5000)
