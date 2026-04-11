@@ -75,7 +75,7 @@ class ScanAction(TemplateAction[ScanParam]):
                     "request_id": request_id,
                     "group_id": group_id,
                     "callback_type": self.callback_type,
-                    "ts": time(),
+                    "timestamp": time(),
                 },
             )
             response.raise_for_status()

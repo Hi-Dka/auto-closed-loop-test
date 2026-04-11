@@ -98,16 +98,18 @@ def parse_suite_yaml(file_path: str) -> SuiteConfig:
 
         if os.path.exists(resolved_sub_path):
             with open(resolved_sub_path, "r", encoding="utf-8") as sf:
-                step_obj.sub_module_data = yaml.safe_load(sf)
+                raw_sub_module_data = yaml.safe_load(sf)
 
-            if step_obj.sub_module_data is None:
+            if raw_sub_module_data is None:
                 raise ValueError(
                     f"module_config for step '{step_obj.id}' is empty: {resolved_sub_path}"
                 )
-            if not isinstance(step_obj.sub_module_data, dict):
+            if not isinstance(raw_sub_module_data, dict):
                 raise ValueError(
                     f"module_config for step '{step_obj.id}' must be an object/dict: {resolved_sub_path}"
                 )
+
+            step_obj.sub_module_data = raw_sub_module_data
 
             action_class = step_obj.sub_module_data.get("action_class")
             if not isinstance(action_class, str) or not action_class.strip():

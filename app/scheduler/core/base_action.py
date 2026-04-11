@@ -262,7 +262,7 @@ class CallbackStore:
         )
         callback_data["status"] = callback_data.get("status", "unknown")
         callback_data["payload"] = callback_data.get("payload", dict(callback_data))
-        callback_data["ts"] = callback_data.get("ts", time())
+        callback_data["timestamp"] = callback_data.get("timestamp", time())
         callback_data.setdefault("request_id", None)
         callback_data.setdefault("group_id", None)
         return callback_data
@@ -279,8 +279,8 @@ class CallbackStore:
 
         callback_type = callback_data.get("callback_type")
         status = callback_data.get("status")
-        ts = callback_data.get("ts")
-        return f"fallback:{request_id}:{callback_type}:{status}:{ts}"
+        timestamp = callback_data.get("timestamp")
+        return f"fallback:{request_id}:{callback_type}:{status}:{timestamp}"
 
     def _cleanup_expired_locked(self, now: float) -> None:
         expire_before = now - self._ttl_seconds
@@ -288,7 +288,7 @@ class CallbackStore:
         self._queue = deque(
             callback
             for callback in self._queue
-            if float(callback.get("ts", now)) >= expire_before
+            if float(callback.get("timestamp", now)) >= expire_before
         )
 
         expired_keys = [
