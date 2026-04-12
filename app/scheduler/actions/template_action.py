@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Literal, TypeVar
+from typing import Literal, Optional, TypeVar
 
 from app.scheduler.core.base_action import BaseAction, BaseParam, CompletionPolicy
 from app.scheduler.core.logger import base_log, TaskLoggerAdapter
@@ -19,6 +19,7 @@ class ActionPhase:
     name: str
     send_count: int
     completion_policy: CompletionPolicy
+    timeout: Optional[float] = None
     timeout_behavior: TimeoutBehavior = "fail_fast"
     min_callbacks_on_timeout: int = 0
     request_id_validation_enabled: bool = False
@@ -56,8 +57,9 @@ class TemplateAction(BaseAction[TParam]):
         """Build a unique group identifier for one phase execution."""
 
     def _execute_phase(self, phase: ActionPhase) -> bool:
+        phase_timeout = self._resolve_phase_timeout(phase)
         log.info(
-            f"Executing phase '{phase.name}' with send_count={phase.send_count}, policy={phase.completion_policy.count.kind}"
+            f"Executing phase '{phase.name}' with send_count={phase.send_count}, policy={phase.completion_policy.count.kind}, timeout={phase_timeout}"
         )
 
         if phase.send_count <= 0:
@@ -83,7 +85,7 @@ class TemplateAction(BaseAction[TParam]):
         try:
             callbacks = self._wait_for_callbacks_by_policy(
                 policy=final_policy,
-                timeout=self.phase_timeout_seconds,
+                timeout=phase_timeout,
                 callback_type=self.callback_type,
                 group_id=group_id,
             )
@@ -118,6 +120,14 @@ class TemplateAction(BaseAction[TParam]):
 
         log.error(f"Phase '{phase.name}' timed out with fail_fast behavior.")
         return False
+
+    def _resolve_phase_timeout(self, phase: ActionPhase) -> float:
+        timeout = phase.timeout if phase.timeout is not None else self.phase_timeout_seconds
+        if timeout <= 0:
+            raise ValueError(
+                f"Phase '{phase.name}' timeout must be greater than 0, got: {timeout}"
+            )
+        return float(timeout)
 
     @property
     @abstractmethod

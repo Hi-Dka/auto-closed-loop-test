@@ -52,6 +52,7 @@ class ScanAction(TemplateAction[ScanParam]):
                 send_count=self.SEND_COUNT,
                 completion_policy=self.EXPECT_POLICY,
                 request_id_validation_enabled=True,
+                timeout=self.phase_timeout_seconds,
                 timeout_behavior=self.TIMEOUT_BEHAVIOR,
                 min_callbacks_on_timeout=self.MIN_CALLBACKS_ON_TIMEOUT,
             )
