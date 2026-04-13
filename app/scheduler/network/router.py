@@ -74,12 +74,13 @@ async def get_scheduler_status(request: Request):
     )
     if app.state.scheduler_running:
         scheduler_status = "running"
-    elif run_status in {"success", "failed", "initialized", "idle"}:
+    elif run_status in {"initialized", "idle"}:
         scheduler_status = run_status
     else:
-        scheduler_status = "stopped"
+        scheduler_status = "idle"
 
     return {
+        "scheduler_running": app.state.scheduler_running,
         "scheduler_status": scheduler_status,
         "last_outcome": getattr(app.state, "scheduler_last_outcome", "unknown"),
         "flow_status": status,

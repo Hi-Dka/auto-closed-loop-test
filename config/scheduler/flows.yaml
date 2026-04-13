@@ -30,6 +30,10 @@ pipeline:
     name: "DAB SCANNER"
     module_config: "modules/scan.yaml"
 
+  - step: 02_dab_scan
+    name: "DAB SCANNER 2"
+    module_config: "modules/scan.yaml"
+
 # ==========================================
 # 后置处理：定义测试完成后的操作，如生成报告等,未使用（保留以备后续扩展）
 # ==========================================

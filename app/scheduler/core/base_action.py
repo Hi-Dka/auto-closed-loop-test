@@ -175,8 +175,9 @@ class CallbackStore:
 
     def notify(self, data: dict[str, Any], callback_type: Optional[str] = None) -> None:
         callback_data = self._normalize_callback_data(data, callback_type)
-        dedupe_key = self._build_dedupe_key(callback_data)
         now = time()
+        callback_data["received_at"] = now
+        dedupe_key = self._build_dedupe_key(callback_data)
 
         with self._condition:
             self._cleanup_expired_locked(now=now)
@@ -263,6 +264,7 @@ class CallbackStore:
         callback_data["status"] = callback_data.get("status", "unknown")
         callback_data["payload"] = callback_data.get("payload", dict(callback_data))
         callback_data["timestamp"] = callback_data.get("timestamp", time())
+        callback_data.setdefault("received_at", None)
         callback_data.setdefault("request_id", None)
         callback_data.setdefault("group_id", None)
         return callback_data
@@ -288,7 +290,8 @@ class CallbackStore:
         self._queue = deque(
             callback
             for callback in self._queue
-            if float(callback.get("timestamp", now)) >= expire_before
+            if float(callback.get("received_at") or callback.get("timestamp", now))
+            >= expire_before
         )
 
         expired_keys = [
