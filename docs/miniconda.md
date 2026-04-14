@@ -1,6 +1,6 @@
 <h1 align="center">Miniconda Installation Guide</h1>
 
-因为在开发服务器上的软件比如CMake，Python等的版本较旧，无法满足测试需求，所以需要安装Miniconda来管理软件环境。
+因为在开发服务器上的软件比如CMake，Python等的版本较旧，但又没有安装软件的权限，无法满足测试需求，所以需要安装Miniconda来管理软件环境。
 
 ## 下载Miniconda安装脚本
 ```bash
