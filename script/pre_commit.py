@@ -161,6 +161,7 @@ async def push_executable():
         stderr=asyncio.subprocess.DEVNULL,
     )
 
+    return p
     # _, stderr = await p.communicate()
     # if p.returncode != 0:
     #     print(f"Failed to run executable: {stderr.decode().strip()}")
@@ -340,8 +341,13 @@ def generate_step_view(data: Dict[str, Any], frame_idx: int):
 
 async def main():
     compile_code()
-    await push_executable()
-    await check_schedule_status()
+    process = await push_executable()
+    try:
+        await check_schedule_status()
+    finally:
+        if process and process.returncode is None:
+            process.terminate()
+            await process.wait()
 
 
 if __name__ == "__main__":
