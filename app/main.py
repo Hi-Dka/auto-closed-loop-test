@@ -1,5 +1,11 @@
-import uvicorn
+from pathlib import Path
 from multiprocessing import Process
+
+import uvicorn
+from dotenv import load_dotenv
+
+
+load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
 from app.odr_executor.odr_executor import odr_executor_app
 from app.scheduler.scheduler import scheduler_app
