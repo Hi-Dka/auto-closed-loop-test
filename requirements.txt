@@ -34,6 +34,10 @@ idna==3.11
     # via
     #   anyio
     #   requests
+markdown-it-py==4.0.0
+    # via rich
+mdurl==0.1.2
+    # via markdown-it-py
 packaging==26.0
     # via
     #   build
@@ -46,6 +50,8 @@ pydantic==2.12.5
     # via fastapi
 pydantic-core==2.41.5
     # via pydantic
+pygments==2.20.0
+    # via rich
 pyproject-hooks==1.2.0
     # via
     #   build
@@ -61,6 +67,8 @@ pyyaml==6.0.3
     #   -r requirements.in
     #   uvicorn
 requests==2.33.1
+    # via -r requirements.in
+rich==15.0.0
     # via -r requirements.in
 starlette==1.0.0
     # via fastapi

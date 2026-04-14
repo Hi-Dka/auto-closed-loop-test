@@ -17,3 +17,6 @@ watchfiles
 
 # --- 格式处理 ---
 PyYAML
+
+# --- 文字处理 ---
+rich
