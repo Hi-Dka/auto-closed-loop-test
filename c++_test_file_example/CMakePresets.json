@@ -1,0 +1,52 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "Android_Radio_Test_Configure",
+      "displayName": "Android Radio Test (Dynamic Env)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "Android",
+        "ANDROID_BUILD": "TRUE",
+        "BUILD_SHARED_LIBS":"FALSE",
+        "ANDROID_STL": "c++_static",
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-30",
+        "ANDROID_NDK": "$env{ANDROID_NDK_HOME}",
+        "CMAKE_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
+        "CMAKE_C_COMPILER_LAUNCHER": "$env{CMAKE_LAUNCHER}",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "$env{CMAKE_LAUNCHER}",
+        "CMAKE_BUILD_TYPE":"Release",
+        "CMAKE_CXX_STANDARD": "17",
+        "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+        "CMAKE_CXX_EXTENSIONS": "OFF",
+
+        "CMAKE_RUNTIME_OUTPUT_DIRECTORY": "${sourceDir}/build/${presetName}/bin",
+        "CMAKE_LIBRARY_OUTPUT_DIRECTORY": "${sourceDir}/build/${presetName}/lib",
+        "CMAKE_ARCHIVE_OUTPUT_DIRECTORY": "${sourceDir}/build/${presetName}/lib"
+      },
+      "environment": {
+        "NINJA_STATUS": "[%f/%t (%p):: %e :: %r]"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "Android_Radio_Test_Build",
+      "displayName": "Android Radio Test Build",
+      "description": "Build Radio Test Module",
+      "configurePreset": "Android_Radio_Test_Configure",
+      "targets": [
+        "all"
+      ],
+      "configuration": "Release",
+      "cleanFirst": true
+    }
+  ]
+}
