@@ -17,9 +17,9 @@ class AudioEncGuard(ProcessGuard):
 
         if "output_port" not in cmd:
             self._log.warning(
-                "Port not specified in new command, using default value: 9000"
+                "Port not specified in new command, using default value: 9001"
             )
-            cmd["output_port"] = 9000
+            cmd["output_port"] = 9001
 
         if "bitrate" not in cmd:
             self._log.warning(

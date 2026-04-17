@@ -33,10 +33,32 @@ ensemble {
 }
 
 services {
-    srv-music {
+    srv-music1 {
         id 0x4daa
-        label "music"
-        shortlabel "mu"
+        label "music srv one"
+        shortlabel "musicone"
+        pty 4
+        pty-sd static
+        language 0
+        announcements {
+            Alarm false
+            Traffic true
+            Travel false
+            Warning false
+            News false
+            Weather false
+            Event false
+            Special false
+            ProgrammeInfo false
+            Sports false
+            Finance false
+            clusters "1,2"
+        }
+    }
+    srv-music2 {
+        id 0x4dab
+        label "music srv two"
+        shortlabel "musictwo"
         pty 4
         pty-sd static
         language 0
@@ -58,28 +80,45 @@ services {
 }
 
 subchannels {
-    sub-ri {
+    sub-music1 {
         type dabplus
         bitrate 64
         id 2
         protection 3
         inputproto zmq
-        inputuri "tcp://127.0.0.1:9000"
-        zmq-buffer 120
-        zmq-prebuffering 100
+        inputuri "tcp://127.0.0.1:9001"
+        zmq-buffer 2048
+        zmq-prebuffering 40
         encryption false
         ;secret-key "keys/mux.sec"
         ;public-key "keys/mux.pub"
         ;encoder-key "keys/encoder1.pub"
         ; key pairs can be generated using the zmqinput-keygen tool.
     }
+
+    sub-music2 {
+        type dabplus
+        bitrate 64
+        id 3
+        protection 3
+        inputproto zmq
+        inputuri "tcp://127.0.0.1:9002"
+        zmq-buffer 2048
+        zmq-prebuffering 40
+        encryption false
+        ;secret-key "keys/mux.sec"
+        ;public-key "keys/mux.pub"
+        ;encoder-key "keys/encoder1.pub"
+        ; key pairs can be generated using the zmqinput-keygen tool.
+    }
+
     sub-ta {
         type dabplus
         bitrate 64
         id 1
         protection 3
         inputproto zmq
-        inputuri "tcp://127.0.0.1:9001"
+        inputuri "tcp://127.0.0.1:9000"
         zmq-buffer 40
         zmq-prebuffering 20
         encryption false
@@ -99,7 +138,7 @@ subchannels {
 }
 
 components {
-    comp-music {
+    comp-music1 {
         ; specifies audio -or- packet type, defaults to zero when not given
         ; audio: foreground=0, background=1, multi-channel=2
         ; data: unspecified=0, TMC=1, EWS=2, ITTS=3, paging=4, TDC=5, IP=59, MOT=60, proprietary=61
@@ -110,8 +149,8 @@ components {
         ; in that case.
         ;label "funk"
         ;shortlabel "fu"
-        service srv-music
-        subchannel sub-ri
+        service srv-music1
+        subchannel sub-music1
 
         ; FIG 0/13 user application was previously configured using the figtype setting, which
         ; allowed only a single user application.
@@ -137,6 +176,15 @@ components {
 
             ; Journaline, adds uaType 0x44a and user application data 0x00 0x00 (TS 102 979 Clause 8.1.2)
             ; userapp "journaline"
+        }
+    }
+
+    comp-music2 {
+        type 0
+        service srv-music2
+        subchannel sub-music2
+        user-applications {
+            userapp "slideshow"
         }
     }
 }

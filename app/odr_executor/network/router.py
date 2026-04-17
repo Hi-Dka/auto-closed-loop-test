@@ -35,7 +35,8 @@ class SessionManagerObj(Protocol):
         self, wait: bool = True, timeout: float = 8.0
     ) -> None: ...
     def launch_all_active_sessions(self) -> None: ...
-    def stop_ffmpeg_guards(self, guard_id: str) -> bool: ...
+    def launch_ffmpeg_guard(self, port: int, command_data: dict) -> None: ...
+    def stop_ffmpeg_guards(self, port: int) -> bool: ...
 
 
 _response_state: Dict[str, SessionManagerObj | None] = {"manager": None}
@@ -78,42 +79,35 @@ async def update_socat(port: int, payload: SocatUpdateRequest):
     return _dispatch_update(target="socat", data=payload.data, port=port)
 
 
-@router.post("/ffmpeg/start")
-async def start_ffmpeg(payload: FFmpegUpdateRequest, file: UploadFile = File(...)):
-    payload_data = payload.model_dump()
-    if payload_data.get("id") is None:
-        return HTTPException(
-            status_code=400,
-            detail="FFmpeg update requires an 'id' field in the payload",
-        )
-
+@router.post("/launchffmpeg/{port}")
+async def start_ffmpeg(port: int, file: UploadFile = File(...)):
     file_content = await file.read()
     dynamic_data = {
+        "port": port,
         "file_bytes": file_content,
         "filename": file.filename,
         "content_type": file.content_type,
-        **payload.model_dump(),
     }
-    return _dispatch_update(target="ffmpeg", data=dynamic_data)
-
-
-@router.post("/ffmpeg/stop")
-async def stop_ffmpeg(payload: FFmpegUpdateRequest):
-    payload_data = payload.model_dump()
-    guard_id = payload_data.get("id")
-    if guard_id is None:
-        return HTTPException(
-            status_code=400,
-            detail="FFmpeg stop requires an 'id' field in the payload",
-        )
 
     session_manager = _get_session_manager_response()
-    if session_manager.stop_ffmpeg_guards(guard_id):
-        return {"status": "success", "id": guard_id}
+    if session_manager.launch_ffmpeg_guard(port=port, command_data=dynamic_data):
+        return {"status": "success", "port": port}
+
+    return HTTPException(
+        status_code=500,
+        detail=f"Failed to launch FFmpeg guard for port: {port}",
+    )
+
+
+@router.post("/stopffmpeg/{port}")
+async def stop_ffmpeg(port: int):
+    session_manager = _get_session_manager_response()
+    if session_manager.stop_ffmpeg_guards(port):
+        return {"status": "success", "port": port}
 
     return HTTPException(
         status_code=404,
-        detail=f"No FFmpeg guard found with id: {guard_id}",
+        detail=f"No FFmpeg guard found with port: {port}",
     )
 
 

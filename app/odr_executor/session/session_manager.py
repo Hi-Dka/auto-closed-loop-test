@@ -14,7 +14,7 @@ class SessionManager:
     def __init__(self) -> None:
         self._stable_session = StableSession()
         self._active_sessions: dict[int, ActiveSession] = {}
-        self._ffmpeg_guard: dict[str, FFmpegGuard] = {}
+        self._ffmpeg_guard: dict[int, FFmpegGuard] = {}
         self._log = TaskLoggerAdapter(base_log, {"tag": "SessionManager"})
 
     @classmethod
@@ -93,9 +93,12 @@ class SessionManager:
         is_ffmpeg_update = False
 
         if target == "ffmpeg":
-            guard = FFmpegGuard()
+            if not port or port not in self._ffmpeg_guard:
+                self._log.error(f"Invalid port {port} for FFmpeg guard update.")
+                raise ValueError(f"Invalid port {port} for FFmpeg guard update.")
+
+            guard = self._ffmpeg_guard[port]
             guard.update_command(data)
-            self._ffmpeg_guard[data.get("id", "default")] = guard
             is_update_cmd = True
             is_ffmpeg_update = True
 
@@ -144,7 +147,7 @@ class SessionManager:
         self._log.info(f"Command dispatched successfully to {target} on port {port}.")
         return None
 
-    def stop_ffmpeg_guards(self, guard_id: str):
+    def stop_ffmpeg_guards(self, guard_id: int):
         guard = self._ffmpeg_guard.get(guard_id)
         if guard:
             guard.undeploy()
@@ -152,6 +155,16 @@ class SessionManager:
             del self._ffmpeg_guard[guard_id]
             return True
         return False
+
+    def launch_ffmpeg_guard(self, port: int, command_data: dict) -> None:
+        if port in self._ffmpeg_guard:
+            self._log.warning(f"FFmpeg guard already exists for port {port}, skipping.")
+            return
+
+        guard = FFmpegGuard(port)
+        guard.update_command(command_data)
+        guard.deploy()
+        self._ffmpeg_guard[port] = guard
 
     def _stable_guards(self):
         guards = [
