@@ -1,0 +1,4 @@
+action_class: "app.scheduler.actions.start_odr_action.StartODRAction"
+callback_type: "start-odr"
+config:
+  url: "http://localhost:8080/command/v1"

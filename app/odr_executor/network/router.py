@@ -10,7 +10,7 @@ from app.odr_executor.network.data_model import (
     AudioEncUpdateRequest,
     PadEncUpdateRequest,
     SocatUpdateRequest,
-    FFmpegUpdateRequest,
+    BaseRequest,
 )
 
 router = APIRouter(prefix="/command/v1", tags=["Odr-Tools Control"])
@@ -35,7 +35,8 @@ class SessionManagerObj(Protocol):
         self, wait: bool = True, timeout: float = 8.0
     ) -> None: ...
     def launch_all_active_sessions(self) -> None: ...
-    def launch_ffmpeg_guard(self, port: int, command_data: dict) -> None: ...
+    def launch_ffmpeg_guard(self, port: int, command_data: dict) -> bool: ...
+
     def stop_ffmpeg_guards(self, port: int) -> bool: ...
 
 
@@ -80,7 +81,9 @@ async def update_socat(port: int, payload: SocatUpdateRequest):
 
 
 @router.post("/launchffmpeg/{port}")
-async def start_ffmpeg(port: int, file: UploadFile = File(...)):
+async def start_ffmpeg(
+    port: int, payload: Optional[BaseRequest] = None, file: UploadFile = File(...)
+):
     file_content = await file.read()
     dynamic_data = {
         "port": port,
@@ -89,9 +92,14 @@ async def start_ffmpeg(port: int, file: UploadFile = File(...)):
         "content_type": file.content_type,
     }
 
+    payload_data = payload.model_dump() if payload else {}
     session_manager = _get_session_manager_response()
     if session_manager.launch_ffmpeg_guard(port=port, command_data=dynamic_data):
-        return {"status": "success", "port": port}
+        return {
+            **BaseRequest(**payload_data).model_dump(),
+            "status": "success",
+            "port": port,
+        }
 
     return HTTPException(
         status_code=500,
@@ -100,10 +108,15 @@ async def start_ffmpeg(port: int, file: UploadFile = File(...)):
 
 
 @router.post("/stopffmpeg/{port}")
-async def stop_ffmpeg(port: int):
+async def stop_ffmpeg(port: int, payload: Optional[BaseRequest] = None):
+    payload_data = payload.model_dump() if payload else {}
     session_manager = _get_session_manager_response()
     if session_manager.stop_ffmpeg_guards(port):
-        return {"status": "success", "port": port}
+        return {
+            **BaseRequest(**payload_data).model_dump(),
+            "status": "success",
+            "port": port,
+        }
 
     return HTTPException(
         status_code=404,
@@ -136,7 +149,7 @@ async def update_hackrf(payload: HackRFUpdateRequest):
 
 @router.post("/audioenc/{port}/update")
 async def update_audioenc(port: int, payload: AudioEncUpdateRequest):
-    if payload.bitrate % 8 != 0:
+    if payload.bitrate is not None and payload.bitrate % 8 != 0:
         raise HTTPException(status_code=400, detail="bitrate must be a multiple of 8")
     return _dispatch_update(target="audioenc", data=payload.model_dump(), port=port)
 
@@ -152,38 +165,54 @@ async def update_padenc(port: int, payload: PadEncUpdateRequest):
 
 
 @router.post("/launchactive/{port}")
-async def launch_active(port: int):
+async def launch_active(port: int, payload: Optional[BaseRequest] = None):
+    payload_data = payload.model_dump() if payload else {}
     _get_session_manager_response().launch_active_session(socat_port=port)
-    return {"status": "success", "port": port}
+
+    return {
+        **BaseRequest(**payload_data).model_dump(),
+        "status": "success",
+        "port": port,
+    }
 
 
 @router.post("/stopactive/{port}")
-async def stop_active(port: int):
+async def stop_active(port: int, payload: Optional[BaseRequest] = None):
+    payload_data = payload.model_dump() if payload else {}
     _get_session_manager_response().stop_active_session(socat_port=port)
-    return {"status": "success", "port": port}
+    return {
+        **BaseRequest(**payload_data).model_dump(),
+        "status": "success",
+        "port": port,
+    }
 
 
 @router.post("/launchstable")
-async def launch_stable():
+async def launch_stable(payload: Optional[BaseRequest] = None):
+    payload_data = payload.model_dump() if payload else {}
     _get_session_manager_response().launch_stable_session()
-    return {"status": "success"}
+
+    return {**BaseRequest(**payload_data).model_dump(), "status": "success"}
 
 
 @router.post("/stopstable")
-async def stop_stable():
+async def stop_stable(payload: Optional[BaseRequest] = None):
+    payload_data = payload.model_dump() if payload else {}
     _get_session_manager_response().stop_stable_session()
-    return {"status": "success"}
+    return {**BaseRequest(**payload_data).model_dump(), "status": "success"}
 
 
 @router.post("/stopall")
-async def stop_all():
+async def stop_all(payload: Optional[BaseRequest] = None):
+    payload_data = payload.model_dump() if payload else {}
     _get_session_manager_response().stop_stable_session()
     _get_session_manager_response().stop_all_active_sessions()
-    return {"status": "success"}
+    return {**BaseRequest(**payload_data).model_dump(), "status": "success"}
 
 
 @router.post("/launchall")
-async def launch_all():
+async def launch_all(payload: Optional[BaseRequest] = None):
+    payload_data = payload.model_dump() if payload else {}
     _get_session_manager_response().launch_stable_session()
     _get_session_manager_response().launch_all_active_sessions()
-    return {"status": "success"}
+    return {**BaseRequest(**payload_data).model_dump(), "status": "success"}

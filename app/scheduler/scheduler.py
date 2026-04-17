@@ -58,7 +58,7 @@ scheduler_app = create_scheduler_app(
     )
 )
 
-# if __name__ == "__main__":
-#     import uvicorn
+if __name__ == "__main__":
+    import uvicorn
 
-#     uvicorn.run(scheduler_app, host="localhost", port=5000)
+    uvicorn.run(scheduler_app, host="localhost", port=8090)

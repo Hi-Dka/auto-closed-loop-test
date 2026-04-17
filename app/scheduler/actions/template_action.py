@@ -23,7 +23,7 @@ class ActionPhase:
     timeout_behavior: TimeoutBehavior = "fail_fast"
     min_callbacks_on_timeout: int = 0
     request_id_validation_enabled: bool = False
-    needCallback: bool = True
+    need_callback: bool = True
 
 
 class TemplateAction(BaseAction[TParam]):
@@ -83,7 +83,7 @@ class TemplateAction(BaseAction[TParam]):
         if phase.request_id_validation_enabled:
             final_policy = phase.completion_policy.with_request_ids(request_ids)
 
-        if not phase.needCallback:
+        if not phase.need_callback:
             log.info(f"Phase '{phase.name}' does not require callbacks, skipping wait.")
             return True
 

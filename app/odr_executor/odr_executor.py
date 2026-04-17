@@ -53,7 +53,7 @@ def create_odr_executor_app() -> FastAPI:
 
 odr_executor_app = create_odr_executor_app()
 
-# if __name__ == "__main__":
-#     import uvicorn
+if __name__ == "__main__":
+    import uvicorn
 
-#     uvicorn.run(odr_executor_app, host="localhost", port=8888)
+    uvicorn.run(odr_executor_app, host="localhost", port=8080)

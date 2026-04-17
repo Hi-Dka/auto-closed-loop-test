@@ -147,24 +147,25 @@ class SessionManager:
         self._log.info(f"Command dispatched successfully to {target} on port {port}.")
         return None
 
-    def stop_ffmpeg_guards(self, guard_id: int):
-        guard = self._ffmpeg_guard.get(guard_id)
+    def stop_ffmpeg_guards(self, port: int) -> bool:
+        guard = self._ffmpeg_guard.get(port)
         if guard:
             guard.undeploy()
             guard.wait_until_stopped(timeout=8.0)
-            del self._ffmpeg_guard[guard_id]
+            del self._ffmpeg_guard[port]
             return True
         return False
 
-    def launch_ffmpeg_guard(self, port: int, command_data: dict) -> None:
+    def launch_ffmpeg_guard(self, port: int, command_data: dict) -> bool:
         if port in self._ffmpeg_guard:
             self._log.warning(f"FFmpeg guard already exists for port {port}, skipping.")
-            return
+            return False
 
         guard = FFmpegGuard(port)
         guard.update_command(command_data)
         guard.deploy()
         self._ffmpeg_guard[port] = guard
+        return True
 
     def _stable_guards(self):
         guards = [
