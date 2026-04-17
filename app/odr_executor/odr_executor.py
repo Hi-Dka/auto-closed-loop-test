@@ -21,8 +21,8 @@ def create_odr_executor_app() -> FastAPI:
         set_session_manager_obj(manager)
 
         try:
-            manager.launch_stable_session()
-            manager.launch_active_session(socat_port=5656)
+            # manager.launch_stable_session()
+            # manager.launch_active_session(socat_port=5656)
 
             yield
 
