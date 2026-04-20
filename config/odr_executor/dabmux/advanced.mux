@@ -13,7 +13,7 @@ remotecontrol {
 }
 
 ensemble {
-    id 0x4fff
+    id 0x4ffe
     ecc 0xA0
     local-time-offset auto
     international-table 1

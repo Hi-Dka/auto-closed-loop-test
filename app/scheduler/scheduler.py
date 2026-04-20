@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from dotenv import load_dotenv
 
 from app.scheduler.core.logger import base_log, TaskLoggerAdapter
 from app.scheduler.engine.master import MasterScheduler
@@ -13,6 +14,8 @@ from app.scheduler.network.router import (
     set_callback_target,
 )
 
+
+load_dotenv(dotenv_path=Path(__file__).resolve().parents[2] / ".env")
 
 log = TaskLoggerAdapter(base_log, {"tag": "SchedulerApp"})
 

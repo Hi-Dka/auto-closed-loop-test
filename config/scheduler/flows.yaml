@@ -26,10 +26,13 @@ env:
 # ==========================================
 
 pipeline:
-  - step: 01_start_odr
-    name: "Start ODR"
-    module_config: "modules/start_odr.yaml"
+  # - step: 01_start_odr
+  #   name: "Start ODR"
+  #   module_config: "modules/start_odr.yaml"
 
+  - step: 01_SCRIBE_DAB_SERVICE
+    name: "SCRIBE DAB Service"
+    module_config: "modules/scan.yaml"
 # ==========================================
 # 后置处理：定义测试完成后的操作，如生成报告等,未使用（保留以备后续扩展）
 # ==========================================

@@ -1,4 +1,6 @@
 import importlib
+import os
+import sys
 from typing import Optional, Any
 from dataclasses import dataclass
 
@@ -20,6 +22,8 @@ class ActionStep:
 
 
 class MasterScheduler(metaclass=SingletonMeta):
+    ACTION_HOT_RELOAD_ENV = "SCHEDULER_ACTION_HOT_RELOAD"
+
     def __init__(self, config_path: str):
         self._config_path = config_path
         self._suite_config: Optional[SuiteConfig] = None
@@ -31,6 +35,16 @@ class MasterScheduler(metaclass=SingletonMeta):
         self._last_error: Optional[str] = None
         self._last_failed_step_id: Optional[str] = None
         self._last_failed_step_name: Optional[str] = None
+        self._enable_action_hot_reload = self._read_hot_reload_flag()
+
+        log.info(
+            f"Action hot reload is {'enabled' if self._enable_action_hot_reload else 'disabled'} "
+            f"(env: {self.ACTION_HOT_RELOAD_ENV})"
+        )
+
+    def _read_hot_reload_flag(self) -> bool:
+        raw_value = os.getenv(self.ACTION_HOT_RELOAD_ENV, "0").strip().lower()
+        return raw_value in {"1", "true", "yes", "on"}
 
     def dispatch_callback(self, data: dict, callback_type: str):
         log.info(f"Dispatching callback of type '{callback_type}' with data: {data}")
@@ -74,7 +88,14 @@ class MasterScheduler(metaclass=SingletonMeta):
             ) from e
 
         try:
+            module_already_loaded = module_name in sys.modules
             module = importlib.import_module(module_name)
+
+            if self._enable_action_hot_reload and module_already_loaded:
+                module = importlib.reload(module)
+                log.info(
+                    f"Reloaded action module '{module_name}' for step {step_config.id}"
+                )
         except ImportError as e:
             log.error(f"Error importing module for step {step_config.id}: {e}")
             raise RuntimeError(

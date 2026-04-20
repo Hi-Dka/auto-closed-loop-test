@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Literal, Optional, TypeVar
+from typing import Any, Literal, Optional, TypeVar
 
 from app.scheduler.core.base_action import BaseAction, BaseParam, CompletionPolicy
 from app.scheduler.core.logger import base_log, TaskLoggerAdapter
@@ -97,6 +97,10 @@ class TemplateAction(BaseAction[TParam]):
         except TimeoutError:
             return self._handle_phase_timeout(phase=phase, group_id=group_id)
 
+        if not self._validate_phase_callbacks(phase=phase, callbacks=callbacks):
+            log.error(f"Phase '{phase.name}' callback validation failed.")
+            return False
+
         log.info(f"Phase '{phase.name}' completed with {len(callbacks)} callback(s).")
         return True
 
@@ -133,6 +137,13 @@ class TemplateAction(BaseAction[TParam]):
                 f"Phase '{phase.name}' timeout must be greater than 0, got: {timeout}"
             )
         return float(timeout)
+
+    @abstractmethod
+    def _validate_phase_callbacks(
+        self, phase: ActionPhase, callbacks: list[dict[str, Any]]
+    ) -> bool: ...
+
+    """Validate the received callbacks for the given phase. By default, no additional validation is performed beyond what the completion policy enforces."""
 
     @property
     @abstractmethod
