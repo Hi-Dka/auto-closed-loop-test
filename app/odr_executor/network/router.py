@@ -3,6 +3,7 @@ import binascii
 from typing import Any, Dict, Optional, Protocol
 
 from fastapi import APIRouter, Body, HTTPException
+from fastapi.openapi.models import Example
 
 from app.odr_executor.network.data_model import (
     ApplyActiveRequest,
@@ -184,24 +185,20 @@ STOP_EXAMPLES = {
 }
 
 
-APPLY_BODY_EXAMPLES = [
-    APPLY_EXAMPLES["stable"]["value"],
-    APPLY_EXAMPLES["active_with_audioenc"]["value"],
-    APPLY_EXAMPLES["dabmod"]["value"],
-    APPLY_EXAMPLES["ffmpeg"]["value"],
-]
+APPLY_OPENAPI_EXAMPLES: dict[str, Example] = {
+    key: Example(summary=item["summary"], value=item["value"])
+    for key, item in APPLY_EXAMPLES.items()
+}
 
-STOP_BODY_EXAMPLES = [
-    STOP_EXAMPLES["stop_stable"]["value"],
-    STOP_EXAMPLES["stop_active"]["value"],
-    STOP_EXAMPLES["stop_ffmpeg"]["value"],
-    STOP_EXAMPLES["stop_all"]["value"],
-]
+STOP_OPENAPI_EXAMPLES: dict[str, Example] = {
+    key: Example(summary=item["summary"], value=item["value"])
+    for key, item in STOP_EXAMPLES.items()
+}
 
 
 @router.post("/apply")
 async def apply_process(
-    payload: ProcessApplyRequest = Body(..., examples=APPLY_BODY_EXAMPLES)
+    payload: ProcessApplyRequest = Body(..., openapi_examples=APPLY_OPENAPI_EXAMPLES)
 ):
     payload_data = _payload_meta(payload)
 
@@ -319,7 +316,7 @@ async def apply_process(
 
 @router.post("/stop")
 async def stop_process(
-    payload: ProcessStopRequest = Body(..., examples=STOP_BODY_EXAMPLES)
+    payload: ProcessStopRequest = Body(..., openapi_examples=STOP_OPENAPI_EXAMPLES)
 ):
     payload_data = _payload_meta(payload)
 
