@@ -33,6 +33,8 @@ class StartODRAction(TemplateAction[StartODRParam]):
         "fail_fast"
     )
     MIN_CALLBACKS_ON_TIMEOUT = 0
+    HTTP_TIMEOUT_SECONDS = 5
+    FFMPEG_HTTP_TIMEOUT_SECONDS = 30
 
     def __init__(self):
         super().__init__(StartODRParam)
@@ -113,7 +115,7 @@ class StartODRAction(TemplateAction[StartODRParam]):
             )
             response = requests.post(
                 self.start_endpoint + "/apply",
-                timeout=5,
+                timeout=self.HTTP_TIMEOUT_SECONDS,
                 json={
                     **necessary_data,
                     "process": "stable",
@@ -144,7 +146,7 @@ class StartODRAction(TemplateAction[StartODRParam]):
             )
             response = requests.post(
                 self.start_endpoint + "/apply",
-                timeout=5,
+                timeout=self.HTTP_TIMEOUT_SECONDS,
                 json={
                     **necessary_data,
                     "process": "active",
@@ -159,7 +161,7 @@ class StartODRAction(TemplateAction[StartODRParam]):
 
             response = requests.post(
                 self.start_endpoint + "/apply",
-                timeout=5,
+                timeout=self.HTTP_TIMEOUT_SECONDS,
                 json={
                     **necessary_data,
                     "process": "active",
@@ -181,6 +183,12 @@ class StartODRAction(TemplateAction[StartODRParam]):
         self, request_id: str, group_id: str, phase: StartODRPhase
     ) -> bool:
         try:
+            necessary_data = {
+                "request_id": request_id,
+                "group_id": group_id,
+                "callback_type": self.callback_type,
+                "timestamp": time(),
+            }
             log.info(
                 f"Posting phase '{phase.name}' with request_id={request_id}, group_id={group_id}"
             )
@@ -191,8 +199,9 @@ class StartODRAction(TemplateAction[StartODRParam]):
                 file_bytes = f.read()
                 response = requests.post(
                     self.start_endpoint + "/apply",
-                    timeout=5,
+                    timeout=self.FFMPEG_HTTP_TIMEOUT_SECONDS,
                     json={
+                        **necessary_data,
                         "process": "ffmpeg",
                         "selector": {"port": 5656},
                         "config": {
@@ -214,8 +223,9 @@ class StartODRAction(TemplateAction[StartODRParam]):
                 file_bytes = f.read()
                 response = requests.post(
                     self.start_endpoint + "/apply",
-                    timeout=5,
+                    timeout=self.FFMPEG_HTTP_TIMEOUT_SECONDS,
                     json={
+                        **necessary_data,
                         "process": "ffmpeg",
                         "selector": {"port": 5657},
                         "config": {
