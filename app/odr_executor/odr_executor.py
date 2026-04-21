@@ -29,8 +29,20 @@ def create_odr_executor_app() -> FastAPI:
         finally:
             log.info("Shutting down the application...")
             clear_session_manager_obj()
-            manager.stop_stable_session()
-            manager.stop_all_active_sessions()
+            if not manager.stop_all_ffmpeg_guards(timeout=8.0):
+                log.error("Some FFmpeg guards did not stop cleanly during shutdown")
+
+            try:
+                manager.stop_stable_session()
+            except RuntimeError as exc:
+                log.error(f"Stable session did not stop cleanly during shutdown: {exc}")
+
+            try:
+                manager.stop_all_active_sessions()
+            except RuntimeError as exc:
+                log.error(
+                    f"Active sessions did not stop cleanly during shutdown: {exc}"
+                )
 
     odr_executor_app = FastAPI(
         lifespan=lifespan,

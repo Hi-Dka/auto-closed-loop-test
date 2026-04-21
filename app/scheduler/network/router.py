@@ -132,17 +132,16 @@ def _normalize_callback_message(
     return message
 
 
-@router.post("/scan")
-async def handle_generic(request: Request):
+@router.post("/{action}")
+async def handle_action(action: str, request: Request):
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(
             status_code=400, detail="Callback JSON body must be an object"
         )
-
-    data = _normalize_callback_message(cast(Dict[str, Any], body), callback_type="scan")
+    data = _normalize_callback_message(cast(Dict[str, Any], body), callback_type=action)
     scheduler = _get_scheduler_target(request)
-    scheduler.dispatch_callback(data, callback_type="scan")
+    scheduler.dispatch_callback(data, callback_type=action)
     return {"status": "ok"}
 
 

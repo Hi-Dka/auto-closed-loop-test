@@ -1,0 +1,4 @@
+action_class: "app.scheduler.actions.select_action.SelectAction"
+callback_type: "select"
+config:
+  time_out: 60

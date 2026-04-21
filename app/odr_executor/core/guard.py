@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 import copy
+import os
+import signal
 import subprocess
 import threading
 import time
@@ -47,6 +49,7 @@ class ProcessGuard(ABC):
                     text=True,
                     bufsize=1,
                     universal_newlines=True,
+                    start_new_session=True,
                 ) as process:
                     self._process = process
 
@@ -100,20 +103,47 @@ class ProcessGuard(ABC):
         self._is_running = False
 
         if self._process:
-            self._process.terminate()
+            target_pid = self._process.pid
+
+            if target_pid is not None and hasattr(os, "killpg"):
+                try:
+                    os.killpg(target_pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    self._log.debug("Process group already exited before SIGTERM.")
+                except OSError as exc:
+                    self._log.debug(
+                        f"Failed to send SIGTERM to process group: {exc}. Falling back to terminate()."
+                    )
+                    self._process.terminate()
+            else:
+                self._process.terminate()
+
             try:
                 self._process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 self._log.warning(
                     "Process failed to stop gracefully, killing it (SIGKILL)"
                 )
-                self._process.kill()
+
+                if target_pid is not None and hasattr(os, "killpg"):
+                    try:
+                        os.killpg(target_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        self._log.debug("Process group already exited before SIGKILL.")
+                    except OSError as exc:
+                        self._log.debug(
+                            f"Failed to send SIGKILL to process group: {exc}. Falling back to kill()."
+                        )
+                        self._process.kill()
+                else:
+                    self._process.kill()
+
                 self._process.wait(timeout=3)
 
             self._process = None
 
         if self._monitor_thread and self._monitor_thread.is_alive():
-            self._monitor_thread.join(timeout=1.0)
+            self._monitor_thread.join(timeout=3.0)
 
         self._log.info("ProcessGuard has been stopped.")
 

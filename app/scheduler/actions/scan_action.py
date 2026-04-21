@@ -7,20 +7,14 @@ from uuid import uuid4
 from app.scheduler.core.base_action import BaseParam, CompletionPolicy
 from app.scheduler.core.logger import base_log, TaskLoggerAdapter
 from app.scheduler.actions.template_action import ActionPhase, TemplateAction
-
+from app.scheduler.actions.shared.constants import (
+    DEFAULT_ENDPOINT,
+    ENSEMBLE_ID,
+    ENSEMBLE_LABEL,
+    ENSEMBLE_SERVICES,
+)
 
 log = TaskLoggerAdapter(base_log, {"tag": "ScanAction"})
-
-DEFAULT_SCAN_ENDPOINT = "http://127.0.0.1:8000/scan"
-
-SERVER_LIST = [
-    {"label": "music srv one", "id": "0x4daa"},
-    {"label": "music srv two", "id": "0x4dab"},
-]
-
-ENSEMBLE_ID = "0x4ffe"
-ENSEMBLE_LABEL = "OpenDigitalRadio"
-ENSEMBLE_SERVICES = SERVER_LIST
 
 ScanPhase = ActionPhase
 
@@ -43,7 +37,7 @@ class ScanAction(TemplateAction[ScanParam]):
 
     def __init__(self):
         super().__init__(ScanParam)
-        self._scan_endpoint = os.getenv("SCHEDULER_SCAN_URL", DEFAULT_SCAN_ENDPOINT)
+        self._endpoint = os.getenv("DEFAULT_ENDPOINT", DEFAULT_ENDPOINT)
 
     @property
     def callback_type(self) -> str:
@@ -85,7 +79,7 @@ class ScanAction(TemplateAction[ScanParam]):
                 f"Posting phase '{phase.name}' with request_id={request_id}, group_id={group_id}"
             )
             response = requests.post(
-                self._scan_endpoint,
+                self._endpoint + "/scan",
                 timeout=5,
                 json={
                     "background": True,
@@ -128,13 +122,6 @@ class ScanAction(TemplateAction[ScanParam]):
         return True
 
     def _validate_single_callback(self, callback: dict[str, Any]) -> bool:
-        status = str(callback.get("status", "")).lower()
-        if status not in {"success", "ok"}:
-            log.error(
-                f"Scan callback status is not successful: {callback.get('status')}"
-            )
-            return False
-
         payload = callback.get("payload")
         if not isinstance(payload, dict):
             log.error("Scan callback payload must be an object")

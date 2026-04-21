@@ -156,6 +156,29 @@ class SessionManager:
             return True
         return False
 
+    def stop_all_ffmpeg_guards(self, timeout: float = 8.0) -> bool:
+        if not self._ffmpeg_guard:
+            self._log.info("No FFmpeg guards to stop.")
+            return True
+
+        self._log.info("stopping all ffmpeg guards...")
+        all_stopped = True
+        for port in list(self._ffmpeg_guard.keys()):
+            guard = self._ffmpeg_guard.get(port)
+            if guard is None:
+                continue
+
+            guard.undeploy()
+            if not guard.wait_until_stopped(timeout=timeout):
+                self._log.error(
+                    f"FFmpeg guard for port {port} not fully stopped in time"
+                )
+                all_stopped = False
+
+            del self._ffmpeg_guard[port]
+
+        return all_stopped
+
     def launch_ffmpeg_guard(self, port: int, command_data: dict) -> bool:
         if port in self._ffmpeg_guard:
             self._log.warning(f"FFmpeg guard already exists for port {port}, skipping.")

@@ -1,5 +1,5 @@
 from time import sleep, time
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 from pathlib import Path
 
@@ -220,3 +220,8 @@ class StartODRAction(TemplateAction[StartODRParam]):
 
     def _build_group_id(self) -> str:
         return f"{self.GROUP_ID_PREFIX}-{uuid4().hex}"
+
+    def _validate_phase_callbacks(
+        self, phase: ActionPhase, callbacks: list[dict[str, Any]]
+    ) -> bool:
+        return True
