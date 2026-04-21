@@ -185,13 +185,32 @@ STOP_EXAMPLES = {
 }
 
 
+COMMON_REQUEST_META = {
+    "request_id": "req-odr-001",
+    "group_id": "group-odr",
+    "callback_type": "start-odr",
+    "timestamp": 1710000000.0,
+}
+
+
+def _with_meta(
+    body: dict[str, Any], *, callback_type: str = "start-odr"
+) -> dict[str, Any]:
+    meta = dict(COMMON_REQUEST_META)
+    meta["callback_type"] = callback_type
+    return {**meta, **body}
+
+
 APPLY_OPENAPI_EXAMPLES: dict[str, Example] = {
-    key: Example(summary=item["summary"], value=item["value"])
+    key: Example(summary=item["summary"], value=_with_meta(item["value"]))
     for key, item in APPLY_EXAMPLES.items()
 }
 
 STOP_OPENAPI_EXAMPLES: dict[str, Example] = {
-    key: Example(summary=item["summary"], value=item["value"])
+    key: Example(
+        summary=item["summary"],
+        value=_with_meta(item["value"], callback_type="stop-odr"),
+    )
     for key, item in STOP_EXAMPLES.items()
 }
 

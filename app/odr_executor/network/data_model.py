@@ -4,12 +4,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class BaseRequest(BaseModel):
-    request_id: Optional[str] = Field(default=None, description="请求唯一 ID")
-    group_id: Optional[str] = Field(default=None, description="请求分组 ID")
-    callback_type: Optional[str] = Field(default=None, description="回调类型标识")
-    timestamp: Optional[float] = Field(
-        default=None, description="请求时间戳（Unix seconds）"
-    )
+    request_id: str = Field(..., description="请求唯一 ID")
+    group_id: str = Field(..., description="请求分组 ID")
+    callback_type: str = Field(..., description="回调类型标识")
+    timestamp: float = Field(..., description="请求时间戳（Unix seconds）")
 
 
 class ProcessSelector(BaseModel):
