@@ -28,6 +28,12 @@ class SessionManager:
     def release_port(cls, port: int) -> None:
         cls._active_ports.discard(port)
 
+    def has_active_session(self, port: int) -> bool:
+        return port in self._active_sessions
+
+    def has_ffmpeg_guard(self, port: int) -> bool:
+        return port in self._ffmpeg_guard
+
     def launch_stable_session(self) -> None:
         self._log.info("launching stable session...")
         self._stable_session.launch()
@@ -82,6 +88,49 @@ class SessionManager:
         for port in list(self._active_sessions.keys()):
             self.launch_active_session(port)
 
+    def apply_all_active_sessions(self) -> None:
+        self._log.info("applying all active sessions...")
+        for port in list(self._active_sessions.keys()):
+            self.stop_active_session(port)
+            self.launch_active_session(port)
+
+    def apply_active_session(
+        self,
+        socat_port: int,
+        audioenc_data: dict | None = None,
+        padenc_data: dict | None = None,
+        socat_data: dict | None = None,
+    ) -> None:
+        self._log.info(f"applying active session for task {socat_port}...")
+
+        is_new_session = socat_port not in self._active_sessions
+        if socat_port not in self._active_sessions:
+            self._log.info(
+                f"Active session for task {socat_port} not found, creating it before apply."
+            )
+            self._active_sessions[socat_port] = ActiveSession(
+                str(socat_port), socat_port
+            )
+
+        session = self._active_sessions[socat_port]
+
+        session.apply(
+            audioenc_data=audioenc_data,
+            padenc_data=padenc_data,
+            socat_data=socat_data,
+        )
+
+        session.stop()
+        if not self._wait_active_stopped(socat_port, timeout=8.0):
+            raise RuntimeError(
+                f"Timed out waiting for active session {socat_port} to stop."
+            )
+
+        if is_new_session and not self.check_port(socat_port):
+            raise RuntimeError(f"Port {socat_port} is already in use.")
+
+        session.launch()
+
     def dispatch(self, target: str, data: dict, port: Optional[int] = None) -> None:
         self._log.info(
             f"Dispatching command to target: {target}, port: {port}, data: {data}"
@@ -91,6 +140,7 @@ class SessionManager:
         is_stable_update = False
         is_active_update = False
         is_ffmpeg_update = False
+        is_new_session = False
 
         if target == "ffmpeg":
             if not port or port not in self._ffmpeg_guard:
@@ -110,9 +160,16 @@ class SessionManager:
                 is_stable_update = True
 
         if target in ["audioenc", "padenc", "socat"]:
-            if not port or port not in self._active_sessions:
+            if not port:
                 self._log.error(f"Invalid port {port} for target {target}.")
                 raise ValueError(f"Invalid port {port} for target {target}.")
+
+            is_new_session = port not in self._active_sessions
+            if port not in self._active_sessions:
+                self._log.info(
+                    f"Active session for port {port} not found, creating it before dispatch."
+                )
+                self._active_sessions[port] = ActiveSession(str(port), port)
 
             session = self._active_sessions[port]
             processor = getattr(session, f"_{target}_guard", None)
@@ -142,6 +199,10 @@ class SessionManager:
                 raise RuntimeError(
                     f"Timed out waiting for active session {port} to stop."
                 )
+
+            if is_new_session and not self.check_port(port):
+                raise RuntimeError(f"Port {port} is already in use.")
+
             session.launch()
 
         self._log.info(f"Command dispatched successfully to {target} on port {port}.")

@@ -34,3 +34,18 @@ class ActiveSession:
         self._audioenc_guard.undeploy()
         self._padenc_guard.undeploy()
         self._socat_guard.undeploy()
+
+    def apply(
+        self,
+        audioenc_data: dict | None = None,
+        padenc_data: dict | None = None,
+        socat_data: dict | None = None,
+    ) -> None:
+        if audioenc_data is not None:
+            self._audioenc_guard.update_command(audioenc_data)
+
+        if padenc_data is not None:
+            self._padenc_guard.update_command(padenc_data)
+
+        if socat_data is not None:
+            self._socat_guard.update_command(socat_data)

@@ -26,9 +26,9 @@ env:
 # ==========================================
 
 pipeline:
-  # - step: 01_start_odr
-  #   name: "Start ODR"
-  #   module_config: "modules/start_odr.yaml"
+  - step: 01_start_odr
+    name: "Start ODR"
+    module_config: "modules/start_odr.yaml"
 
   - step: 02_SCRIBE_DAB_SERVICE
     name: "SCRIBE DAB Service"

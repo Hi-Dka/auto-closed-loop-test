@@ -10,7 +10,7 @@ ODR Executor 的核心职责：
 
 1. 维护一组长期运行的无线链路进程（stable session）
 2. 维护一组按端口区分的任务会话（active session）
-3. 通过统一接口更新进程参数并触发安全重启
+3. 通过统一的 apply 接口更新进程参数并触发安全重启
 
 它本质上是一个“**进程守护 + 会话编排 + API 控制**”服务。
 
@@ -36,10 +36,10 @@ ODR Executor 的核心职责：
 - 路径：`app/odr_executor/network/router.py`
 - 路由前缀：`/command/v1`
 - 主要能力：
-  - 更新进程参数（dabmux / dabmod / hackrf / audioenc / padenc / socat / ffmpeg）
-  - 启停 stable session
-  - 启停指定端口 active session
-  - 一键停全部或拉起全部
+  - 统一 apply：`POST /command/v1/apply`
+  - 统一 stop：`POST /command/v1/stop`
+  - 一键停全部：`POST /command/v1/stopall`
+  - process、端口等目标信息均通过 JSON 传入（不放在 URL 中）
 
 ### 3) 数据模型层
 
@@ -126,26 +126,24 @@ ODR Executor 的核心职责：
 
 #### 会话控制
 
-- 启动 stable session
-- 停止 stable session
-- 启动指定端口 active session
-- 停止指定端口 active session
-- 一键启动全部 / 停止全部
+- `POST /command/v1/apply` + `{"process": "stable"}`
+- `POST /command/v1/apply` + `{"process": "active", "selector": {"port": 5656}}`
+- `POST /command/v1/stop` + `{"process": "stable"}`
+- `POST /command/v1/stop` + `{"process": "active", "selector": {"port": 5656}}`
+- `POST /command/v1/stop` + `{"process": "all"}` 或 `POST /command/v1/stopall`
 
 #### 参数更新
 
-- `dabmux` 更新
-- `dabmod` 更新
-- `hackrf` 更新
-- `audioenc`（按端口）更新
-- `padenc`（按端口）更新
-- `ffmpeg` 启停（按 id）
+- `dabmux`：`POST /command/v1/apply`，`process=dabmux`，`config` 包含 `file_base64`
+- `dabmod` / `hackrf`：`POST /command/v1/apply`，`process` 对应组件，参数放 `config`
+- `audioenc` / `padenc` / `socat`：`POST /command/v1/apply`，`process` 对应组件，端口放 `selector.port`
+- `ffmpeg`：`POST /command/v1/apply`，`process=ffmpeg`，`selector.port` + `config.file_base64`
 
 ### 3) 使用建议顺序
 
 1. 先确认会话已拉起（stable + 对应 active 端口）
 2. 再下发参数更新
-3. 观察进程重启日志，确认重启后运行稳定
+3. 观察进程重启日志，确认 apply 后运行稳定
 4. 对于 ffmpeg，按唯一 id 管理启动/停止
 
 ---
@@ -159,8 +157,8 @@ ODR Executor 的核心职责：
 
 ### 2) 文件上传语义
 
-- `dabmux` 与 `ffmpeg/start` 支持文件上传
-- 文件内容会被读取并参与目标命令构建
+- `dabmux` 与 `ffmpeg` 通过 `config.file_base64` 传输文件内容
+- 需要同时提供 `filename`、`content_type`（可选，系统有默认值）
 
 ### 3) 默认值与自动补齐
 
@@ -223,7 +221,7 @@ ODR Executor 的核心职责：
 1. 新增对应 Guard（命令解析 + 参数校验）
 2. 将 Guard 放入 stable 或 active session
 3. 在 `SessionManager.dispatch` 增加 target 路由与重启策略
-4. 在接口层新增对应 update 路由与数据模型
+4. 在接口层扩展 `process` 分发逻辑和对应数据模型
 
 这样可以保持“接口层、会话层、进程层”职责清晰，后续维护成本最低。
 

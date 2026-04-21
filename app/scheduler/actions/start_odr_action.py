@@ -1,3 +1,4 @@
+import base64
 from time import sleep, time
 from typing import Any, Literal
 from uuid import uuid4
@@ -111,9 +112,13 @@ class StartODRAction(TemplateAction[StartODRParam]):
                 f"Posting phase '{phase.name}' with request_id={request_id}, group_id={group_id}"
             )
             response = requests.post(
-                self.start_endpoint + "/launchstable",
+                self.start_endpoint + "/apply",
                 timeout=5,
-                json=necessary_data,
+                json={
+                    **necessary_data,
+                    "process": "stable",
+                    "config": {},
+                },
             )
             response.raise_for_status()
             log.info(
@@ -138,9 +143,14 @@ class StartODRAction(TemplateAction[StartODRParam]):
                 f"Posting phase '{phase.name}' with request_id={request_id}, group_id={group_id}"
             )
             response = requests.post(
-                self.start_endpoint + "/launchactive/5656",
+                self.start_endpoint + "/apply",
                 timeout=5,
-                json=necessary_data,
+                json={
+                    **necessary_data,
+                    "process": "active",
+                    "selector": {"port": 5656},
+                    "config": {},
+                },
             )
             response.raise_for_status()
             log.info(
@@ -148,21 +158,14 @@ class StartODRAction(TemplateAction[StartODRParam]):
             )
 
             response = requests.post(
-                self.start_endpoint + "/launchactive/5657",
+                self.start_endpoint + "/apply",
                 timeout=5,
-                json=necessary_data,
-            )
-            response.raise_for_status()
-            log.info(
-                f"Start ODR POST response: {response.status_code} - {response.json()}"
-            )
-
-            sleep(2)
-
-            response = requests.post(
-                self.start_endpoint + "/audioenc/5657/update",
-                timeout=5,
-                json={"output_port": 9002},
+                json={
+                    **necessary_data,
+                    "process": "active",
+                    "selector": {"port": 5657},
+                    "config": {"audioenc": {"output_port": 9002}},
+                },
             )
             response.raise_for_status()
             log.info(
@@ -185,11 +188,19 @@ class StartODRAction(TemplateAction[StartODRParam]):
             with open(
                 Path(__file__).resolve().parents[3] / "files" / "lanlianhua.wav", "rb"
             ) as f:
-                file = {"file": ("lanlianhua.wav", f, "audio/wav")}
+                file_bytes = f.read()
                 response = requests.post(
-                    self.start_endpoint + "/launchffmpeg/5656",
+                    self.start_endpoint + "/apply",
                     timeout=5,
-                    files=file,
+                    json={
+                        "process": "ffmpeg",
+                        "selector": {"port": 5656},
+                        "config": {
+                            "file_base64": base64.b64encode(file_bytes).decode("utf-8"),
+                            "filename": "lanlianhua.wav",
+                            "content_type": "audio/wav",
+                        },
+                    },
                 )
                 response.raise_for_status()
                 log.info(
@@ -200,11 +211,19 @@ class StartODRAction(TemplateAction[StartODRParam]):
             with open(
                 Path(__file__).resolve().parents[3] / "files" / "No_Rest.wav", "rb"
             ) as f:
-                file = {"file": ("No_Rest.wav", f, "audio/wav")}
+                file_bytes = f.read()
                 response = requests.post(
-                    self.start_endpoint + "/launchffmpeg/5657",
+                    self.start_endpoint + "/apply",
                     timeout=5,
-                    files=file,
+                    json={
+                        "process": "ffmpeg",
+                        "selector": {"port": 5657},
+                        "config": {
+                            "file_base64": base64.b64encode(file_bytes).decode("utf-8"),
+                            "filename": "No_Rest.wav",
+                            "content_type": "audio/wav",
+                        },
+                    },
                 )
                 response.raise_for_status()
                 log.info(
