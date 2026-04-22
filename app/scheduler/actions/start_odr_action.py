@@ -159,6 +159,8 @@ class StartODRAction(TemplateAction[StartODRParam]):
                 f"Start ODR POST response: {response.status_code} - {response.json()}"
             )
 
+            sleep(2)
+
             response = requests.post(
                 self.start_endpoint + "/apply",
                 timeout=self.HTTP_TIMEOUT_SECONDS,

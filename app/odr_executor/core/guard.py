@@ -178,6 +178,9 @@ class ProcessGuard(ABC):
         self._log.info("Updating command for ProcessGuard...")
         self._cmd_dict = copy.deepcopy(cmd)
 
+    def command_equals(self, cmd: dict[str, Any]) -> bool:
+        return self._cmd_dict == cmd
+
     @property
     def status(self) -> str:
         if not self._is_running:

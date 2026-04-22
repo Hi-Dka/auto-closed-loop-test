@@ -34,6 +34,15 @@ class SessionManager:
     def has_ffmpeg_guard(self, port: int) -> bool:
         return port in self._ffmpeg_guard
 
+    def _summarize_command_data(self, data: dict) -> dict[str, object]:
+        summary: dict[str, object] = {}
+        for key, value in data.items():
+            if isinstance(value, (bytes, bytearray)):
+                summary[key] = f"<{type(value).__name__}: {len(value)} bytes>"
+            else:
+                summary[key] = value
+        return summary
+
     def launch_stable_session(self) -> None:
         self._log.info("launching stable session...")
         self._stable_session.launch()
@@ -133,7 +142,7 @@ class SessionManager:
 
     def dispatch(self, target: str, data: dict, port: Optional[int] = None) -> None:
         self._log.info(
-            f"Dispatching command to target: {target}, port: {port}, data: {data}"
+            f"Dispatching command to target: {target}, port: {port}, data: {self._summarize_command_data(data)}"
         )
 
         is_update_cmd = False
@@ -141,13 +150,21 @@ class SessionManager:
         is_active_update = False
         is_ffmpeg_update = False
         is_new_session = False
+        ffmpeg_port: int | None = None
 
         if target == "ffmpeg":
             if not port or port not in self._ffmpeg_guard:
                 self._log.error(f"Invalid port {port} for FFmpeg guard update.")
                 raise ValueError(f"Invalid port {port} for FFmpeg guard update.")
 
-            guard = self._ffmpeg_guard[port]
+            ffmpeg_port = int(port)
+            guard = self._ffmpeg_guard[ffmpeg_port]
+            if guard.command_equals(data):
+                self._log.info(
+                    f"FFmpeg guard for port {ffmpeg_port} already has the same command, skipping restart."
+                )
+                return None
+
             guard.update_command(data)
             is_update_cmd = True
             is_ffmpeg_update = True
@@ -183,10 +200,11 @@ class SessionManager:
             raise ValueError(f"Unknown target type: {target}")
 
         if is_ffmpeg_update:
-            self._log.info("FFmpeg command updated, restarting all FFmpeg guards...")
-            for guard in self._ffmpeg_guard.values():
-                guard.undeploy()
-                guard.deploy()
+            assert ffmpeg_port is not None
+            self._log.info(
+                f"FFmpeg command updated, restarting guard on port {ffmpeg_port}..."
+            )
+            self._ffmpeg_guard[ffmpeg_port].deploy()
 
         if is_stable_update:
             self.stop_stable_session(wait=True, timeout=8.0)

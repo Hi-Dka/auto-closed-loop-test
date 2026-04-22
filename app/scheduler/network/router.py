@@ -124,7 +124,7 @@ def _normalize_callback_message(
     message["callback_type"] = (
         message.get("callback_type") or message.get("type") or callback_type
     )
-    message["status"] = message.get("status", "ok")
+    message["status"] = message.get("status", "success")
     message["payload"] = message.get("payload", dict(message))
     message["timestamp"] = message.get("timestamp", time())
     message.setdefault("request_id", None)
