@@ -94,6 +94,10 @@ def _dispatch_update(target: str, data: Dict[str, Any], port: Optional[int] = No
         ) from e
 
 
+def _handle_stop_failure(exc: RuntimeError) -> None:
+    raise HTTPException(status_code=504, detail=str(exc)) from exc
+
+
 def _payload_meta(payload: BaseRequest) -> dict[str, Any]:
     return BaseRequest(**payload.model_dump()).model_dump()
 
@@ -343,18 +347,27 @@ async def stop_process(
     session_manager = _get_session_manager_response()
 
     if isinstance(payload, StopAllRequest):
-        session_manager.stop_all_ffmpeg_guards(timeout=8.0)
-        session_manager.stop_stable_session()
-        session_manager.stop_all_active_sessions()
+        try:
+            session_manager.stop_all_ffmpeg_guards(timeout=8.0)
+            session_manager.stop_stable_session()
+            session_manager.stop_all_active_sessions()
+        except RuntimeError as exc:
+            _handle_stop_failure(exc)
         return {**payload_data, "status": "success"}
 
     if isinstance(payload, StopStableRequest):
-        session_manager.stop_stable_session()
+        try:
+            session_manager.stop_stable_session()
+        except RuntimeError as exc:
+            _handle_stop_failure(exc)
         return {**payload_data, "status": "success"}
 
     if isinstance(payload, StopActiveRequest):
         port = int(payload.selector.port)
-        session_manager.stop_active_session(socat_port=port)
+        try:
+            session_manager.stop_active_session(socat_port=port)
+        except RuntimeError as exc:
+            _handle_stop_failure(exc)
         return {**payload_data, "status": "success", "port": port}
 
     if isinstance(payload, StopFFmpegRequest):
@@ -375,9 +388,13 @@ async def stop_process(
 @router.post("/stopall")
 async def stop_all(payload: Optional[BaseRequest] = None):
     payload_data = payload.model_dump() if payload else {}
-    _get_session_manager_response().stop_all_ffmpeg_guards(timeout=8.0)
-    _get_session_manager_response().stop_stable_session()
-    _get_session_manager_response().stop_all_active_sessions()
+    manager = _get_session_manager_response()
+    try:
+        manager.stop_all_ffmpeg_guards(timeout=8.0)
+        manager.stop_stable_session()
+        manager.stop_all_active_sessions()
+    except RuntimeError as exc:
+        _handle_stop_failure(exc)
     return {**BaseRequest(**payload_data).model_dump(), "status": "success"}
 
 

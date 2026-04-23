@@ -58,6 +58,7 @@ class ScanAction(TemplateAction[ScanParam]):
                 timeout=self.phase_timeout_seconds,
                 timeout_behavior=self.TIMEOUT_BEHAVIOR,
                 min_callbacks_on_timeout=self.MIN_CALLBACKS_ON_TIMEOUT,
+                wait_time_before_dispatch=10,
             )
         ]
 

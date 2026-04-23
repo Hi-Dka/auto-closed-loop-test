@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
+from time import sleep
 from typing import Any, Literal, Optional, TypeVar
 
 from app.scheduler.core.base_action import BaseAction, BaseParam, CompletionPolicy
@@ -24,6 +25,7 @@ class ActionPhase:
     min_callbacks_on_timeout: int = 0
     request_id_validation_enabled: bool = False
     need_callback: bool = True
+    wait_time_before_dispatch: Optional[float] = None
 
 
 class TemplateAction(BaseAction[TParam]):
@@ -33,6 +35,15 @@ class TemplateAction(BaseAction[TParam]):
         log.info(f"Running {self.__class__.__name__} with params: {self._params}")
 
         for phase in self.build_phases():
+            if (
+                phase.wait_time_before_dispatch is not None
+                and phase.wait_time_before_dispatch > 0
+            ):
+                log.info(
+                    f"Waiting for {phase.wait_time_before_dispatch} seconds before dispatching phase '{phase.name}'..."
+                )
+                sleep(phase.wait_time_before_dispatch)
+
             if not self._execute_phase(phase):
                 return False
 
@@ -142,7 +153,6 @@ class TemplateAction(BaseAction[TParam]):
     def _validate_phase_callbacks(
         self, phase: ActionPhase, callbacks: list[dict[str, Any]]
     ) -> bool: ...
-
 
     @property
     @abstractmethod

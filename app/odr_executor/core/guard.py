@@ -34,6 +34,7 @@ class ProcessGuard(ABC):
         self._restart_count = 0
         self._lifecycle_state: GuardLifecycleState = GuardLifecycleState.STOPPED
         self._allow_restart = True
+        self._stop_event = threading.Event()
 
     def _log_reader(self, pipe: TextIO) -> None:
         try:
@@ -83,7 +84,8 @@ class ProcessGuard(ABC):
                     self._log.warning(
                         f"process exited with code: {return_code}. Restarting..."
                     )
-                    time.sleep(2)
+                    if self._stop_event.wait(2):
+                        break
                 else:
                     self._lifecycle_state = GuardLifecycleState.STOPPED
                     self._log.info(
@@ -97,7 +99,10 @@ class ProcessGuard(ABC):
                 self._log.error(
                     f"process failed to start or encountered an error: {str(e)}"
                 )
-                time.sleep(5)
+                if self._stop_event.wait(5):
+                    break
+
+        self._lifecycle_state = GuardLifecycleState.STOPPED
 
     def _start_guard(self, cmd_list: Sequence[str]) -> None:
         if self._is_running:
@@ -109,6 +114,7 @@ class ProcessGuard(ABC):
         self._cmd = list(cmd_list)
         self._is_running = True
         self._allow_restart = True
+        self._stop_event.clear()
         self._lifecycle_state = GuardLifecycleState.STARTING
         self._monitor_thread = threading.Thread(target=self._monitor, daemon=True)
         self._monitor_thread.start()
@@ -123,6 +129,7 @@ class ProcessGuard(ABC):
         self._log.info("ProcessGuard is stopping...")
         self._is_running = False
         self._allow_restart = False
+        self._stop_event.set()
         self._lifecycle_state = GuardLifecycleState.STOPPING
 
         if self._process:
@@ -167,6 +174,9 @@ class ProcessGuard(ABC):
 
         if self._monitor_thread and self._monitor_thread.is_alive():
             self._monitor_thread.join(timeout=3.0)
+
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            self._log.warning("Monitor thread did not exit before timeout.")
 
         self._lifecycle_state = GuardLifecycleState.STOPPED
         self._log.info("ProcessGuard has been stopped.")

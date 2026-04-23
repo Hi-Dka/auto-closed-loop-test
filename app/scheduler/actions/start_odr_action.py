@@ -73,6 +73,7 @@ class StartODRAction(TemplateAction[StartODRParam]):
                 timeout_behavior=self.TIMEOUT_BEHAVIOR,
                 min_callbacks_on_timeout=self.MIN_CALLBACKS_ON_TIMEOUT,
                 need_callback=False,  # Stable session doesn't send callbacks
+                wait_time_before_dispatch=4,
             ),
             StartODRPhase(
                 name="start-active-session",
@@ -83,6 +84,7 @@ class StartODRAction(TemplateAction[StartODRParam]):
                 timeout_behavior=self.TIMEOUT_BEHAVIOR,
                 min_callbacks_on_timeout=self.MIN_CALLBACKS_ON_TIMEOUT,
                 need_callback=False,  # Active session doesn't send callbacks
+                wait_time_before_dispatch=4,
             ),
             StartODRPhase(
                 name="start-ffmpeg",
@@ -93,6 +95,7 @@ class StartODRAction(TemplateAction[StartODRParam]):
                 timeout_behavior=self.TIMEOUT_BEHAVIOR,
                 min_callbacks_on_timeout=self.MIN_CALLBACKS_ON_TIMEOUT,
                 need_callback=False,  # FFmpeg session doesn't send callbacks
+                wait_time_before_dispatch=4,
             ),
         ]
 
@@ -239,7 +242,6 @@ class StartODRAction(TemplateAction[StartODRParam]):
             log.info(
                 f"Posting phase '{phase.name}' with request_id={request_id}, group_id={group_id}"
             )
-            sleep(2)
             with open(
                 Path(__file__).resolve().parents[3] / "files" / "lanlianhua.wav", "rb"
             ) as f:
