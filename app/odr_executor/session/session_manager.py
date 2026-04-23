@@ -66,6 +66,22 @@ class SessionManager:
         self._log.info("launching stable session...")
         self._stable_session.launch()
 
+    def start_stable_session(self) -> None:
+        self.launch_stable_session()
+
+    def configure_stable_session(
+        self,
+        dabmux_data: dict | None = None,
+        dabmod_data: dict | None = None,
+        hackrf_data: dict | None = None,
+    ) -> None:
+        self._log.info("configuring stable session...")
+        self._stable_session.configure(
+            dabmux_data=dabmux_data,
+            dabmod_data=dabmod_data,
+            hackrf_data=hackrf_data,
+        )
+
     def stop_stable_session(self, wait: bool = True, timeout: float = 8.0) -> None:
         self._log.info("stopping stable session...")
         self._stable_session.stop()
@@ -82,6 +98,43 @@ class SessionManager:
         active_session = ActiveSession(str(socat_port), socat_port)
         active_session.launch()
         self._active_sessions[socat_port] = active_session
+
+    def start_active_session(self, socat_port: int) -> None:
+        self._log.info(f"starting active session for task {socat_port}...")
+
+        if socat_port not in self._active_sessions:
+            if not self.check_port(socat_port):
+                self._log.error(f"Port {socat_port} is already in use.")
+                raise RuntimeError(f"Port {socat_port} is already in use.")
+
+            self._active_sessions[socat_port] = ActiveSession(
+                str(socat_port), socat_port
+            )
+        elif socat_port not in self._active_ports and not self.check_port(socat_port):
+            self._log.error(f"Port {socat_port} is already in use.")
+            raise RuntimeError(f"Port {socat_port} is already in use.")
+
+        self._active_sessions[socat_port].launch()
+
+    def configure_active_session(
+        self,
+        socat_port: int,
+        audioenc_data: dict | None = None,
+        padenc_data: dict | None = None,
+        socat_data: dict | None = None,
+    ) -> None:
+        self._log.info(f"configuring active session for task {socat_port}...")
+
+        if socat_port not in self._active_ports and not self.check_port(socat_port):
+            self._log.error(f"Port {socat_port} is already in use.")
+            raise RuntimeError(f"Port {socat_port} is already in use.")
+
+        session = self._ensure_active_session(socat_port)
+        session.apply(
+            audioenc_data=audioenc_data,
+            padenc_data=padenc_data,
+            socat_data=socat_data,
+        )
 
     def _ensure_active_session(self, socat_port: int) -> ActiveSession:
         session = self._active_sessions.get(socat_port)
@@ -272,14 +325,25 @@ class SessionManager:
         return all_stopped
 
     def launch_ffmpeg_guard(self, port: int, command_data: dict) -> bool:
-        if port in self._ffmpeg_guard:
-            self._log.warning(f"FFmpeg guard already exists for port {port}, skipping.")
-            return False
+        self.configure_ffmpeg_guard(port=port, command_data=command_data)
+        return self.start_ffmpeg_guard(port)
 
-        guard = FFmpegGuard(port)
+    def configure_ffmpeg_guard(self, port: int, command_data: dict) -> bool:
+        guard = self._ffmpeg_guard.get(port)
+        if guard is None:
+            guard = FFmpegGuard(port)
+            self._ffmpeg_guard[port] = guard
+
         guard.update_command(command_data)
+        return True
+
+    def start_ffmpeg_guard(self, port: int) -> bool:
+        guard = self._ffmpeg_guard.get(port)
+        if guard is None:
+            self._log.error(f"FFmpeg guard for port {port} not configured.")
+            raise RuntimeError(f"FFmpeg guard for port {port} not configured.")
+
         guard.deploy()
-        self._ffmpeg_guard[port] = guard
         return True
 
     def _stable_guards(self):

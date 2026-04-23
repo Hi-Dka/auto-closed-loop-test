@@ -26,6 +26,19 @@ class StableSession:
         self._dabmod_guard.deploy()
         self._hackrf_guard.deploy()
 
+    def configure(
+        self,
+        dabmux_data: dict | None = None,
+        dabmod_data: dict | None = None,
+        hackrf_data: dict | None = None,
+    ) -> None:
+        if dabmux_data is not None:
+            self._dabmux_guard.update_command(dabmux_data)
+        if dabmod_data is not None:
+            self._dabmod_guard.update_command(dabmod_data)
+        if hackrf_data is not None:
+            self._hackrf_guard.update_command(hackrf_data)
+
     def stop(self) -> None:
         self._log.info("stopping stable session...")
 

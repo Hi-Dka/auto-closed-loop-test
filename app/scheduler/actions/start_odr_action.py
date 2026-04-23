@@ -1,4 +1,3 @@
-import base64
 from time import sleep, time
 from typing import Any, Literal
 from uuid import uuid4
@@ -130,12 +129,9 @@ class StartODRAction(TemplateAction[StartODRParam]):
                 f"Posting phase '{phase.name}' with request_id={request_id}, group_id={group_id}"
             )
             response = requests.post(
-                self.start_endpoint + "/stop",
+                self.start_endpoint + "/all/stop",
                 timeout=self.STOP_HTTP_TIMEOUT_SECONDS,
-                json={
-                    **necessary_data,
-                    "process": "all",
-                },
+                data={**necessary_data},
             )
             response.raise_for_status()
             log.info(
@@ -162,17 +158,34 @@ class StartODRAction(TemplateAction[StartODRParam]):
                 f"Posting phase '{phase.name}' with request_id={request_id}, group_id={group_id}"
             )
             response = requests.post(
-                self.start_endpoint + "/apply",
+                self.start_endpoint + "/stable/configure",
                 timeout=self.HTTP_TIMEOUT_SECONDS,
-                json={
+                data={
                     **necessary_data,
-                    "process": "stable",
-                    "config": {},
+                    "dabmod_mode": 1,
+                    "dabmod_format": "s8",
+                    "dabmod_gain": 0.8,
+                    "dabmod_gainmode": "max",
+                    "dabmod_rate": 2048000,
+                    "hackrf_freq_hz": 227360000,
+                    "hackrf_sample_rate_hz": 2048000,
+                    "hackrf_amp_enable": 1,
+                    "hackrf_gain_db_tx": 40,
                 },
             )
             response.raise_for_status()
             log.info(
-                f"Start ODR POST response: {response.status_code} - {response.json()}"
+                f"Stable configure POST response: {response.status_code} - {response.json()}"
+            )
+
+            response = requests.post(
+                self.start_endpoint + "/stable/start",
+                timeout=self.HTTP_TIMEOUT_SECONDS,
+                data={**necessary_data},
+            )
+            response.raise_for_status()
+            log.info(
+                f"Stable start POST response: {response.status_code} - {response.json()}"
             )
             return True
         except requests.RequestException as e:
@@ -193,35 +206,65 @@ class StartODRAction(TemplateAction[StartODRParam]):
                 f"Posting phase '{phase.name}' with request_id={request_id}, group_id={group_id}"
             )
             response = requests.post(
-                self.start_endpoint + "/apply",
+                self.start_endpoint + "/active/configure",
                 timeout=self.HTTP_TIMEOUT_SECONDS,
-                json={
+                data={
                     **necessary_data,
-                    "process": "active",
-                    "selector": {"port": 5656},
-                    "config": {},
+                    "port": 5656,
+                    "output_port": 9000,
+                    "bitrate": 64,
+                    "sample_rate": 48000,
+                    "channels": 2,
+                    "format": "raw",
+                    "audio_gain": 0,
+                    "pad": 58,
+                    "padenc_sleep": 10,
                 },
             )
             response.raise_for_status()
             log.info(
-                f"Start ODR POST response: {response.status_code} - {response.json()}"
+                f"Active configure POST response: {response.status_code} - {response.json()}"
             )
-
-            sleep(2)
 
             response = requests.post(
-                self.start_endpoint + "/apply",
+                self.start_endpoint + "/active/start",
                 timeout=self.HTTP_TIMEOUT_SECONDS,
-                json={
+                data={**necessary_data, "port": 5656},
+            )
+            response.raise_for_status()
+            log.info(
+                f"Active start POST response: {response.status_code} - {response.json()}"
+            )
+
+            response = requests.post(
+                self.start_endpoint + "/active/configure",
+                timeout=self.HTTP_TIMEOUT_SECONDS,
+                data={
                     **necessary_data,
-                    "process": "active",
-                    "selector": {"port": 5657},
-                    "config": {"audioenc": {"output_port": 9002}},
+                    "port": 5657,
+                    "output_port": 9002,
+                    "bitrate": 64,
+                    "sample_rate": 48000,
+                    "channels": 2,
+                    "format": "raw",
+                    "audio_gain": 0,
+                    "pad": 58,
+                    "padenc_sleep": 10,
                 },
             )
             response.raise_for_status()
             log.info(
-                f"Start ODR POST response: {response.status_code} - {response.json()}"
+                f"Active configure POST response: {response.status_code} - {response.json()}"
+            )
+
+            response = requests.post(
+                self.start_endpoint + "/active/start",
+                timeout=self.HTTP_TIMEOUT_SECONDS,
+                data={**necessary_data, "port": 5657},
+            )
+            response.raise_for_status()
+            log.info(
+                f"Active start POST response: {response.status_code} - {response.json()}"
             )
 
             return True
@@ -245,49 +288,63 @@ class StartODRAction(TemplateAction[StartODRParam]):
             with open(
                 Path(__file__).resolve().parents[3] / "files" / "lanlianhua.wav", "rb"
             ) as f:
-                file_bytes = f.read()
                 response = requests.post(
-                    self.start_endpoint + "/apply",
+                    self.start_endpoint + "/ffmpeg/configure",
                     timeout=self.FFMPEG_HTTP_TIMEOUT_SECONDS,
-                    json={
+                    data={
                         **necessary_data,
-                        "process": "ffmpeg",
-                        "selector": {"port": 5656},
-                        "config": {
-                            "file_base64": base64.b64encode(file_bytes).decode("utf-8"),
-                            "filename": "lanlianhua.wav",
-                            "content_type": "audio/wav",
-                        },
+                        "port": 5656,
                     },
+                    files={"file": ("lanlianhua.wav", f, "audio/wav")},
                 )
                 response.raise_for_status()
                 log.info(
-                    f"Start FFmpeg POST response: {response.status_code} - {response.json()}"
+                    f"FFmpeg configure POST response: {response.status_code} - {response.json()}"
                 )
+
+            response = requests.post(
+                self.start_endpoint + "/ffmpeg/start",
+                timeout=self.FFMPEG_HTTP_TIMEOUT_SECONDS,
+                data={
+                    **necessary_data,
+                    "port": 5656,
+                },
+            )
+            response.raise_for_status()
+            log.info(
+                f"FFmpeg start POST response: {response.status_code} - {response.json()}"
+            )
 
             sleep(2)
             with open(
                 Path(__file__).resolve().parents[3] / "files" / "No_Rest.wav", "rb"
             ) as f:
-                file_bytes = f.read()
                 response = requests.post(
-                    self.start_endpoint + "/apply",
+                    self.start_endpoint + "/ffmpeg/configure",
                     timeout=self.FFMPEG_HTTP_TIMEOUT_SECONDS,
-                    json={
+                    data={
                         **necessary_data,
-                        "process": "ffmpeg",
-                        "selector": {"port": 5657},
-                        "config": {
-                            "file_base64": base64.b64encode(file_bytes).decode("utf-8"),
-                            "filename": "No_Rest.wav",
-                            "content_type": "audio/wav",
-                        },
+                        "port": 5657,
                     },
+                    files={"file": ("No_Rest.wav", f, "audio/wav")},
                 )
                 response.raise_for_status()
                 log.info(
-                    f"Start FFmpeg POST response: {response.status_code} - {response.json()}"
+                    f"FFmpeg configure POST response: {response.status_code} - {response.json()}"
                 )
+
+            response = requests.post(
+                self.start_endpoint + "/ffmpeg/start",
+                timeout=self.FFMPEG_HTTP_TIMEOUT_SECONDS,
+                data={
+                    **necessary_data,
+                    "port": 5657,
+                },
+            )
+            response.raise_for_status()
+            log.info(
+                f"FFmpeg start POST response: {response.status_code} - {response.json()}"
+            )
             return True
         except requests.RequestException as e:
             log.error(f"Failed to post start ffmpeg session: {e}")

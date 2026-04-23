@@ -1,43 +1,39 @@
-import base64
-import binascii
-from typing import Any, Dict, Optional, Protocol
+import io
+import shutil
+import zipfile
+from typing import Any, Dict, Protocol
+from pathlib import Path
 
-from fastapi import APIRouter, Body, HTTPException
-from fastapi.openapi.models import Example
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from app.odr_executor.network.data_model import (
-    ApplyActiveRequest,
-    ApplyAllRequest,
-    ApplyAudioEncRequest,
-    ApplyDabModRequest,
-    ApplyDabMuxRequest,
-    ApplyFFmpegRequest,
-    ApplyHackRFRequest,
-    ApplyPadEncRequest,
-    ApplySocatRequest,
-    ApplyStableRequest,
-    ProcessApplyRequest,
-    ProcessStopRequest,
-    BaseRequest,
-    StopActiveRequest,
-    StopAllRequest,
-    StopFFmpegRequest,
-    StopStableRequest,
-)
+from app.odr_executor.network.data_model import BaseRequest
 
 router = APIRouter(prefix="/command/v1", tags=["Odr-Tools Control"])
 
 STOP_ALL_TIMEOUT_SECONDS = 20.0
+UPLOAD_ROOT = Path("/tmp/odr_executor/uploads")
 
 
 class SessionManagerObj(Protocol):
-    def dispatch(
-        self, target: str, data: Dict[str, Any], port: Optional[int] = None
+
+    def start_stable_session(self) -> None: ...
+    def configure_stable_session(
+        self,
+        dabmux_data: dict | None = None,
+        dabmod_data: dict | None = None,
+        hackrf_data: dict | None = None,
     ) -> None: ...
 
-    def launch_stable_session(self) -> None: ...
     def stop_stable_session(self, wait: bool = True, timeout: float = 8.0) -> None: ...
-    def launch_active_session(self, socat_port: int) -> None: ...
+    def start_active_session(self, socat_port: int) -> None: ...
+    def configure_active_session(
+        self,
+        socat_port: int,
+        audioenc_data: dict | None = None,
+        padenc_data: dict | None = None,
+        socat_data: dict | None = None,
+    ) -> None: ...
+
     def stop_active_session(
         self,
         socat_port: int,
@@ -48,18 +44,8 @@ class SessionManagerObj(Protocol):
     def stop_all_active_sessions(
         self, wait: bool = True, timeout: float = 8.0
     ) -> None: ...
-    def apply_active_session(
-        self,
-        socat_port: int,
-        audioenc_data: dict | None = None,
-        padenc_data: dict | None = None,
-        socat_data: dict | None = None,
-    ) -> None: ...
-    def apply_all_active_sessions(self) -> None: ...
-    def has_active_session(self, port: int) -> bool: ...
-    def has_ffmpeg_guard(self, port: int) -> bool: ...
-
-    def launch_ffmpeg_guard(self, port: int, command_data: dict) -> bool: ...
+    def configure_ffmpeg_guard(self, port: int, command_data: dict) -> bool: ...
+    def start_ffmpeg_guard(self, port: int) -> bool: ...
 
     def stop_ffmpeg_guards(self, port: int) -> bool: ...
     def stop_all_ffmpeg_guards(self, timeout: float = 8.0) -> bool: ...
@@ -84,312 +70,401 @@ def _get_session_manager_response() -> SessionManagerObj:
     return target
 
 
-def _dispatch_update(target: str, data: Dict[str, Any], port: Optional[int] = None):
-    try:
-        _get_session_manager_response().dispatch(target=target, data=data, port=port)
-        return {"status": "success"}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Internal Server Error: {str(e)}"
-        ) from e
-
-
 def _handle_stop_failure(exc: RuntimeError) -> None:
     raise HTTPException(status_code=504, detail=str(exc)) from exc
 
 
-def _payload_meta(payload: BaseRequest) -> dict[str, Any]:
-    return BaseRequest(**payload.model_dump()).model_dump()
+def _safe_filename(filename: str | None) -> str:
+    candidate = Path(filename or "uploaded.bin").name
+    return candidate or "uploaded.bin"
 
 
-def _decode_file_data(config: dict[str, Any], process: str) -> tuple[bytes, str, str]:
-    file_base64 = config.get("file_base64")
-    if not file_base64:
+def _clear_directory(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def _ensure_within_directory(base_dir: Path, target_path: Path) -> None:
+    base_resolved = base_dir.resolve()
+    target_resolved = target_path.resolve()
+    try:
+        target_resolved.relative_to(base_resolved)
+    except ValueError as exc:
         raise HTTPException(
             status_code=400,
-            detail=f"config.file_base64 is required for process '{process}'",
-        )
-
-    try:
-        file_bytes = base64.b64decode(file_base64, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise HTTPException(
-            status_code=400, detail="Invalid config.file_base64"
+            detail="Uploaded archive contains an invalid path.",
         ) from exc
 
-    filename = str(config.get("filename") or "uploaded.bin")
-    content_type = str(config.get("content_type") or "application/octet-stream")
-    return file_bytes, filename, content_type
+
+async def _read_upload_bytes(upload: UploadFile) -> bytes:
+    return await upload.read()
 
 
-APPLY_EXAMPLES = {
-    "stable": {
-        "summary": "启动 stable 会话",
-        "value": {
-            "process": "stable",
-            "request_id": "req-stable-001",
-            "group_id": "group-a",
-            "callback_type": "start-odr",
-            "timestamp": 1710000000.0,
-            "config": {},
-        },
-    },
-    "active_with_audioenc": {
-        "summary": "按端口 apply active，并更新 audioenc",
-        "value": {
-            "process": "active",
-            "selector": {"port": 5657},
-            "config": {"audioenc": {"output_port": 9002, "bitrate": 64}},
-        },
-    },
-    "dabmod": {
-        "summary": "更新 dabmod 参数",
-        "value": {
-            "process": "dabmod",
-            "config": {
-                "mode": 1,
-                "format": "s8",
-                "gain": 0.8,
-                "gainmode": "max",
-                "rate": 2048000,
-            },
-        },
-    },
-    "ffmpeg": {
-        "summary": "按端口 apply ffmpeg 文件输入",
-        "value": {
-            "process": "ffmpeg",
-            "selector": {"port": 5656},
-            "config": {
-                "file_base64": "UklGRigAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=",
-                "filename": "lanlianhua.wav",
-                "content_type": "audio/wav",
-            },
-        },
-    },
-}
+async def _save_single_upload(upload: UploadFile, destination_dir: Path) -> Path:
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    file_path = destination_dir / _safe_filename(upload.filename)
+    file_path.write_bytes(await _read_upload_bytes(upload))
+    return file_path
 
 
-STOP_EXAMPLES = {
-    "stop_stable": {
-        "summary": "停止 stable 会话",
-        "value": {"process": "stable"},
-    },
-    "stop_active": {
-        "summary": "按端口停止 active 会话",
-        "value": {"process": "active", "selector": {"port": 5657}},
-    },
-    "stop_ffmpeg": {
-        "summary": "按端口停止 ffmpeg guard",
-        "value": {"process": "ffmpeg", "selector": {"port": 5656}},
-    },
-    "stop_all": {
-        "summary": "停止所有会话",
-        "value": {"process": "all"},
-    },
-}
+async def _extract_zip_upload(upload: UploadFile, destination_dir: Path) -> None:
+    archive_bytes = await _read_upload_bytes(upload)
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
+        for member in archive.infolist():
+            if member.is_dir():
+                continue
+
+            target_path = destination_dir / member.filename
+            _ensure_within_directory(destination_dir, target_path)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member) as source, open(target_path, "wb") as target:
+                shutil.copyfileobj(source, target)
 
 
-COMMON_REQUEST_META = {
-    "request_id": "req-odr-001",
-    "group_id": "group-odr",
-    "callback_type": "start-odr",
-    "timestamp": 1710000000.0,
-}
+def _padenc_runtime_paths(port: int) -> tuple[Path, Path]:
+    session_root = UPLOAD_ROOT / "padenc" / str(port)
+    slides_dir = session_root / "slides"
+    dls_path = session_root / "dls.txt"
+    return slides_dir, dls_path
 
 
-def _with_meta(
-    body: dict[str, Any], *, callback_type: str = "start-odr"
+def _stable_dabmod_data(
+    dabmod_mode: int,
+    dabmod_format: str,
+    dabmod_gain: float,
+    dabmod_gainmode: str,
+    dabmod_rate: int,
 ) -> dict[str, Any]:
-    meta = dict(COMMON_REQUEST_META)
-    meta["callback_type"] = callback_type
-    return {**meta, **body}
+    return {
+        "mode": dabmod_mode,
+        "format": dabmod_format,
+        "gain": dabmod_gain,
+        "gainmode": dabmod_gainmode,
+        "rate": dabmod_rate,
+    }
 
 
-APPLY_OPENAPI_EXAMPLES: dict[str, Example] = {
-    key: Example(summary=item["summary"], value=_with_meta(item["value"]))
-    for key, item in APPLY_EXAMPLES.items()
-}
+def _stable_hackrf_data(
+    hackrf_freq_hz: int,
+    hackrf_sample_rate_hz: int,
+    hackrf_amp_enable: int,
+    hackrf_gain_db_tx: int,
+) -> dict[str, Any]:
+    return {
+        "freq_hz": hackrf_freq_hz,
+        "sample_rate_hz": hackrf_sample_rate_hz,
+        "amp_enable": hackrf_amp_enable,
+        "gain_db_tx": hackrf_gain_db_tx,
+    }
 
-STOP_OPENAPI_EXAMPLES: dict[str, Example] = {
-    key: Example(
-        summary=item["summary"],
-        value=_with_meta(item["value"], callback_type="stop-odr"),
+
+def _audioenc_data(
+    output_port: int,
+    bitrate: int,
+    sample_rate: int,
+    channels: int,
+    audio_format: str,
+    audio_gain: int,
+    pad: int,
+) -> dict[str, Any]:
+    return {
+        "output_port": output_port,
+        "bitrate": bitrate,
+        "sample_rate": sample_rate,
+        "channels": channels,
+        "format": audio_format,
+        "audio_gain": audio_gain,
+        "pad": pad,
+    }
+
+
+@router.post("/stable/configure")
+async def configure_stable(
+    request_id: str = Form(...),
+    group_id: str = Form(...),
+    callback_type: str = Form(...),
+    timestamp: float = Form(...),
+    dabmod_mode: int = Form(1),
+    dabmod_format: str = Form("s8"),
+    dabmod_gain: float = Form(0.8),
+    dabmod_gainmode: str = Form("max"),
+    dabmod_rate: int = Form(2048000),
+    hackrf_freq_hz: int = Form(227360000),
+    hackrf_sample_rate_hz: int = Form(2048000),
+    hackrf_amp_enable: int = Form(1),
+    hackrf_gain_db_tx: int = Form(40),
+    dabmux_file: UploadFile | None = File(default=None),
+):
+    payload_data = BaseRequest(
+        request_id=request_id,
+        group_id=group_id,
+        callback_type=callback_type,
+        timestamp=timestamp,
+    ).model_dump()
+
+    dabmux_data: dict[str, Any] | None = None
+    if dabmux_file is not None:
+        dabmux_data = {
+            "file_bytes": await _read_upload_bytes(dabmux_file),
+            "filename": _safe_filename(dabmux_file.filename),
+            "content_type": dabmux_file.content_type or "application/octet-stream",
+        }
+
+    _get_session_manager_response().configure_stable_session(
+        dabmux_data=dabmux_data,
+        dabmod_data=_stable_dabmod_data(
+            dabmod_mode=dabmod_mode,
+            dabmod_format=dabmod_format,
+            dabmod_gain=dabmod_gain,
+            dabmod_gainmode=dabmod_gainmode,
+            dabmod_rate=dabmod_rate,
+        ),
+        hackrf_data=_stable_hackrf_data(
+            hackrf_freq_hz=hackrf_freq_hz,
+            hackrf_sample_rate_hz=hackrf_sample_rate_hz,
+            hackrf_amp_enable=hackrf_amp_enable,
+            hackrf_gain_db_tx=hackrf_gain_db_tx,
+        ),
     )
-    for key, item in STOP_EXAMPLES.items()
-}
+
+    return {**payload_data, "status": "success"}
 
 
-@router.post("/apply")
-async def apply_process(
-    payload: ProcessApplyRequest = Body(..., openapi_examples=APPLY_OPENAPI_EXAMPLES)
+@router.post("/stable/start")
+async def start_stable(
+    request_id: str = Form(...),
+    group_id: str = Form(...),
+    callback_type: str = Form(...),
+    timestamp: float = Form(...),
 ):
-    payload_data = _payload_meta(payload)
+    payload_data = BaseRequest(
+        request_id=request_id,
+        group_id=group_id,
+        callback_type=callback_type,
+        timestamp=timestamp,
+    ).model_dump()
 
-    session_manager = _get_session_manager_response()
-
-    if isinstance(payload, ApplyStableRequest):
-        session_manager.launch_stable_session()
-        return {**payload_data, "status": "success"}
-
-    if isinstance(payload, ApplyAllRequest):
-        session_manager.launch_stable_session()
-        session_manager.apply_all_active_sessions()
-        return {**payload_data, "status": "success"}
-
-    if isinstance(payload, ApplyActiveRequest):
-        port = int(payload.selector.port)
-        active_config = payload.config.model_dump(exclude_none=True)
-        audioenc_data = active_config.get("audioenc")
-        padenc_data = active_config.get("padenc")
-        socat_data = active_config.get("socat")
-
-        if isinstance(padenc_data, dict):
-            padenc_data = padenc_data.copy()
-            if padenc_data.get("dir") is None:
-                padenc_data["dir"] = f"/media/padenc/sls-PadEnc-{port}"
-            if padenc_data.get("dls") is None:
-                padenc_data["dls"] = f"/media/padenc/dls-PadEnc-{port}/dls.txt"
-
-        if any(item is not None for item in (audioenc_data, padenc_data, socat_data)):
-            session_manager.apply_active_session(
-                socat_port=port,
-                audioenc_data=(
-                    audioenc_data if isinstance(audioenc_data, dict) else None
-                ),
-                padenc_data=padenc_data if isinstance(padenc_data, dict) else None,
-                socat_data=socat_data if isinstance(socat_data, dict) else None,
-            )
-        else:
-            if session_manager.has_active_session(port):
-                session_manager.stop_active_session(socat_port=port)
-            session_manager.launch_active_session(socat_port=port)
-
-        return {**payload_data, "status": "success", "port": port}
-
-    if isinstance(payload, ApplyFFmpegRequest):
-        port = int(payload.selector.port)
-        config = payload.config.model_dump(exclude_none=True)
-        file_bytes, filename, content_type = _decode_file_data(config, payload.process)
-        dynamic_data = {
-            "port": port,
-            "file_bytes": file_bytes,
-            "filename": filename,
-            "content_type": content_type,
-        }
-
-        if session_manager.has_ffmpeg_guard(port):
-            _dispatch_update(target="ffmpeg", data=dynamic_data, port=port)
-            return {**payload_data, "status": "success", "port": port}
-
-        if session_manager.launch_ffmpeg_guard(port=port, command_data=dynamic_data):
-            return {**payload_data, "status": "success", "port": port}
-
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to launch FFmpeg guard for port: {port}",
-        )
-
-    if isinstance(payload, ApplyDabMuxRequest):
-        config = payload.config.model_dump(exclude_none=True)
-        file_bytes, filename, content_type = _decode_file_data(config, payload.process)
-        dynamic_data = {
-            "file_bytes": file_bytes,
-            "filename": filename,
-            "content_type": content_type,
-        }
-        _dispatch_update(target="dabmux", data=dynamic_data)
-        return {**payload_data, "status": "success"}
-
-    if isinstance(payload, ApplyDabModRequest):
-        _dispatch_update(
-            target="dabmod", data=payload.config.model_dump(exclude_none=True)
-        )
-        return {**payload_data, "status": "success"}
-
-    if isinstance(payload, ApplyHackRFRequest):
-        _dispatch_update(
-            target="hackrf", data=payload.config.model_dump(exclude_none=True)
-        )
-        return {**payload_data, "status": "success"}
-
-    if isinstance(payload, ApplyAudioEncRequest):
-        port = int(payload.selector.port)
-        data = payload.config.model_dump(exclude_none=True)
-        _dispatch_update(target="audioenc", data=data, port=port)
-        return {**payload_data, "status": "success", "port": port}
-
-    if isinstance(payload, ApplyPadEncRequest):
-        port = int(payload.selector.port)
-        data = payload.config.model_dump(exclude_none=True)
-        if data.get("dir") is None:
-            data["dir"] = f"/media/padenc/sls-PadEnc-{port}"
-        if data.get("dls") is None:
-            data["dls"] = f"/media/padenc/dls-PadEnc-{port}/dls.txt"
-
-        _dispatch_update(target="padenc", data=data, port=port)
-        return {**payload_data, "status": "success", "port": port}
-
-    if isinstance(payload, ApplySocatRequest):
-        port = int(payload.selector.port)
-        _dispatch_update(target="socat", data=payload.config, port=port)
-        return {**payload_data, "status": "success", "port": port}
-
-    raise HTTPException(status_code=400, detail="Unsupported apply payload")
+    _get_session_manager_response().start_stable_session()
+    return {**payload_data, "status": "success"}
 
 
-@router.post("/stop")
-async def stop_process(
-    payload: ProcessStopRequest = Body(..., openapi_examples=STOP_OPENAPI_EXAMPLES)
+@router.post("/active/configure")
+async def configure_active(
+    request_id: str = Form(...),
+    group_id: str = Form(...),
+    callback_type: str = Form(...),
+    timestamp: float = Form(...),
+    port: int = Form(...),
+    output_port: int = Form(9000),
+    bitrate: int = Form(64),
+    sample_rate: int = Form(48000),
+    channels: int = Form(2),
+    audio_format: str = Form("raw", alias="format"),
+    audio_gain: int = Form(0),
+    pad: int = Form(58),
+    padenc_sleep: int = Form(10),
+    padenc_image: UploadFile | None = File(
+        default=None,
+        description="可选，单图片文件上传（在 docs 中请使用文件选择器）",
+    ),
+    padenc_archive: UploadFile | None = File(
+        default=None,
+        description="可选，zip 压缩包上传（目录上传推荐使用此字段）",
+    ),
 ):
-    payload_data = _payload_meta(payload)
+    payload_data = BaseRequest(
+        request_id=request_id,
+        group_id=group_id,
+        callback_type=callback_type,
+        timestamp=timestamp,
+    ).model_dump()
 
-    session_manager = _get_session_manager_response()
+    padenc_data: dict[str, Any] = {"sleep": padenc_sleep}
 
-    if isinstance(payload, StopAllRequest):
-        try:
-            session_manager.stop_all_ffmpeg_guards(timeout=STOP_ALL_TIMEOUT_SECONDS)
-            session_manager.stop_stable_session(timeout=STOP_ALL_TIMEOUT_SECONDS)
-            session_manager.stop_all_active_sessions(timeout=STOP_ALL_TIMEOUT_SECONDS)
-        except RuntimeError as exc:
-            _handle_stop_failure(exc)
-        return {**payload_data, "status": "success"}
+    if padenc_image is not None or padenc_archive is not None:
+        slides_dir, dls_path = _padenc_runtime_paths(port)
+        _clear_directory(slides_dir)
 
-    if isinstance(payload, StopStableRequest):
-        try:
-            session_manager.stop_stable_session()
-        except RuntimeError as exc:
-            _handle_stop_failure(exc)
-        return {**payload_data, "status": "success"}
+        if padenc_archive is not None:
+            await _extract_zip_upload(padenc_archive, slides_dir)
 
-    if isinstance(payload, StopActiveRequest):
-        port = int(payload.selector.port)
-        try:
-            session_manager.stop_active_session(socat_port=port)
-        except RuntimeError as exc:
-            _handle_stop_failure(exc)
-        return {**payload_data, "status": "success", "port": port}
+        if padenc_image is not None:
+            await _save_single_upload(padenc_image, slides_dir)
 
-    if isinstance(payload, StopFFmpegRequest):
-        port = int(payload.selector.port)
-        if session_manager.stop_ffmpeg_guards(port):
-            return {**payload_data, "status": "success", "port": port}
-        raise HTTPException(
-            status_code=404,
-            detail=f"No FFmpeg guard found with port: {port}",
+        dls_path.parent.mkdir(parents=True, exist_ok=True)
+        dls_path.write_text(f"PadEnc-{port}", encoding="utf-8")
+        padenc_data["dir"] = str(slides_dir)
+        padenc_data["dls"] = str(dls_path)
+
+    _get_session_manager_response().configure_active_session(
+        socat_port=port,
+        audioenc_data=_audioenc_data(
+            output_port=output_port,
+            bitrate=bitrate,
+            sample_rate=sample_rate,
+            channels=channels,
+            audio_format=audio_format,
+            audio_gain=audio_gain,
+            pad=pad,
+        ),
+        padenc_data=padenc_data,
+    )
+
+    return {**payload_data, "status": "success", "port": port}
+
+
+@router.post("/active/start")
+async def start_active(
+    request_id: str = Form(...),
+    group_id: str = Form(...),
+    callback_type: str = Form(...),
+    timestamp: float = Form(...),
+    port: int = Form(...),
+):
+    payload_data = BaseRequest(
+        request_id=request_id,
+        group_id=group_id,
+        callback_type=callback_type,
+        timestamp=timestamp,
+    ).model_dump()
+
+    _get_session_manager_response().start_active_session(socat_port=port)
+    return {**payload_data, "status": "success", "port": port}
+
+
+@router.post("/ffmpeg/configure")
+async def configure_ffmpeg(
+    request_id: str = Form(...),
+    group_id: str = Form(...),
+    callback_type: str = Form(...),
+    timestamp: float = Form(...),
+    port: int = Form(...),
+    file: UploadFile = File(...),
+):
+    payload_data = BaseRequest(
+        request_id=request_id,
+        group_id=group_id,
+        callback_type=callback_type,
+        timestamp=timestamp,
+    ).model_dump()
+
+    command_data = {
+        "port": port,
+        "file_bytes": await _read_upload_bytes(file),
+        "filename": _safe_filename(file.filename),
+        "content_type": file.content_type or "application/octet-stream",
+    }
+    _get_session_manager_response().configure_ffmpeg_guard(
+        port=port, command_data=command_data
+    )
+    return {**payload_data, "status": "success", "port": port}
+
+
+@router.post("/ffmpeg/start")
+async def start_ffmpeg(
+    request_id: str = Form(...),
+    group_id: str = Form(...),
+    callback_type: str = Form(...),
+    timestamp: float = Form(...),
+    port: int = Form(...),
+):
+    payload_data = BaseRequest(
+        request_id=request_id,
+        group_id=group_id,
+        callback_type=callback_type,
+        timestamp=timestamp,
+    ).model_dump()
+
+    _get_session_manager_response().start_ffmpeg_guard(port=port)
+    return {**payload_data, "status": "success", "port": port}
+
+
+@router.post("/stable/stop")
+async def stop_stable(
+    request_id: str = Form(...),
+    group_id: str = Form(...),
+    callback_type: str = Form(...),
+    timestamp: float = Form(...),
+):
+    payload_data = BaseRequest(
+        request_id=request_id,
+        group_id=group_id,
+        callback_type=callback_type,
+        timestamp=timestamp,
+    ).model_dump()
+
+    try:
+        _get_session_manager_response().stop_stable_session(
+            timeout=STOP_ALL_TIMEOUT_SECONDS
         )
+    except RuntimeError as exc:
+        _handle_stop_failure(exc)
+    return {**payload_data, "status": "success"}
 
+
+@router.post("/active/stop")
+async def stop_active(
+    request_id: str = Form(...),
+    group_id: str = Form(...),
+    callback_type: str = Form(...),
+    timestamp: float = Form(...),
+    port: int = Form(...),
+):
+    payload_data = BaseRequest(
+        request_id=request_id,
+        group_id=group_id,
+        callback_type=callback_type,
+        timestamp=timestamp,
+    ).model_dump()
+
+    try:
+        _get_session_manager_response().stop_active_session(
+            socat_port=port,
+            timeout=STOP_ALL_TIMEOUT_SECONDS,
+        )
+    except RuntimeError as exc:
+        _handle_stop_failure(exc)
+    return {**payload_data, "status": "success", "port": port}
+
+
+@router.post("/ffmpeg/stop")
+async def stop_ffmpeg(
+    request_id: str = Form(...),
+    group_id: str = Form(...),
+    callback_type: str = Form(...),
+    timestamp: float = Form(...),
+    port: int = Form(...),
+):
+    payload_data = BaseRequest(
+        request_id=request_id,
+        group_id=group_id,
+        callback_type=callback_type,
+        timestamp=timestamp,
+    ).model_dump()
+
+    if _get_session_manager_response().stop_ffmpeg_guards(port):
+        return {**payload_data, "status": "success", "port": port}
     raise HTTPException(
-        status_code=400,
-        detail="Unsupported stop payload",
+        status_code=404,
+        detail=f"No FFmpeg guard found with port: {port}",
     )
 
 
-@router.post("/stopall")
-async def stop_all(payload: Optional[BaseRequest] = None):
-    payload_data = payload.model_dump() if payload else {}
+@router.post("/all/stop")
+async def stop_all(
+    request_id: str = Form(...),
+    group_id: str = Form(...),
+    callback_type: str = Form(...),
+    timestamp: float = Form(...),
+):
+    payload_data = BaseRequest(
+        request_id=request_id,
+        group_id=group_id,
+        callback_type=callback_type,
+        timestamp=timestamp,
+    ).model_dump()
+
     manager = _get_session_manager_response()
     try:
         manager.stop_all_ffmpeg_guards(timeout=STOP_ALL_TIMEOUT_SECONDS)
@@ -397,7 +472,7 @@ async def stop_all(payload: Optional[BaseRequest] = None):
         manager.stop_all_active_sessions(timeout=STOP_ALL_TIMEOUT_SECONDS)
     except RuntimeError as exc:
         _handle_stop_failure(exc)
-    return {**BaseRequest(**payload_data).model_dump(), "status": "success"}
+    return {**payload_data, "status": "success"}
 
 
 @router.get("/status")

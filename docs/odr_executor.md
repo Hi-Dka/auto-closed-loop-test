@@ -1,236 +1,228 @@
-# ODR Executor 设计与使用指南
+# ODR Executor 使用说明（当前实现）
 
-这份文档用于说明 `odr_executor` 的当前实现：它负责管理 ODR 相关进程与会话，并通过 HTTP 接口接收更新命令。
+本文档对应当前 `app/odr_executor/network/router.py` 的实际接口：
 
----
-
-## 快速理解（先看这个）
-
-ODR Executor 的核心职责：
-
-1. 维护一组长期运行的无线链路进程（stable session）
-2. 维护一组按端口区分的任务会话（active session）
-3. 通过统一的 apply 接口更新进程参数并触发安全重启
-
-它本质上是一个“**进程守护 + 会话编排 + API 控制**”服务。
+- **全部控制接口统一为表单 (`multipart/form-data`)**
+- 工作流为 **configure → start → stop**
+- `dabmux`、`padenc` 作为会话子组件配置，**不提供独立 start 接口**
 
 ---
 
-## 总体架构
+## 会话模型
 
-### 1) 应用入口层
+### Stable Session（固定链路）
 
-- 路径：`app/odr_executor/odr_executor.py`
-- 作用：创建 FastAPI 应用并在生命周期内初始化会话管理器。
-- 启动时行为：
-  - 注册全局 `session_manager`
-  - 自动拉起 `stable session`
-  - 自动拉起一个默认 `active session`（端口 `5656`）
-- 停止时行为：
-  - 清理全局 manager 引用
-  - 停止 stable session
-  - 停止所有 active session
+包含：
 
-### 2) 接口层
+- `dabmux`
+- `dabmod`
+- `hackrf`
 
-- 路径：`app/odr_executor/network/router.py`
-- 路由前缀：`/command/v1`
-- 主要能力：
-  - 统一 apply：`POST /command/v1/apply`
-  - 统一 stop：`POST /command/v1/stop`
-  - 一键停全部：`POST /command/v1/stopall`
-  - process、端口等目标信息均通过 JSON 传入（不放在 URL 中）
+启动时由 `stable/start` 统一拉起。
 
-### 3) 数据模型层
+### Active Session（按端口）
 
-- 路径：`app/odr_executor/network/data_model.py`
-- 作用：约束 API 入参，提供默认值和基础校验。
-- 典型约束：
-  - `audioenc` 的 `sample_rate` 仅允许固定枚举值
-  - `bitrate` 需要满足编码约束（接口层和进程层都有保护）
+每个 `port` 对应一个会话，包含：
 
-### 4) 会话编排层
+- `audioenc`
+- `padenc`
+- `socat`
 
-- 路径：`app/odr_executor/session/session_manager.py`
-- 核心对象：`SessionManager`（单例）
-- 职责：
-  - 管理 stable/active 会话生命周期
-  - 管理 active 端口占用
-  - 接收 `dispatch` 指令并路由到对应进程 guard
-  - 按目标类型执行“更新后重启”策略
+先按端口 `active/configure`，再按端口 `active/start`。
 
-### 5) 会话实例层
+### FFmpeg Guard（按端口）
 
-- stable session：`app/odr_executor/session/stable_session.py`
-  - 包含：`dabmux`、`dabmod`、`hackrf`
-  - 启动前会准备共享 FIFO
-- active session：`app/odr_executor/session/active_session.py`
-  - 包含：`padenc`、`socat`、`audioenc`
-  - 每个 active session 绑定一个端口和独立 FIFO
-
-### 6) 进程守护层
-
-- 路径：`app/odr_executor/core/guard.py`
-- 基类：`ProcessGuard`
-- 机制：
-  - 子线程监控进程
-  - 异常退出自动重启
-  - 统一日志采集
-  - 支持 deploy / undeploy / wait_until_stopped
+独立于 stable/active，以端口区分，支持 `configure/start/stop`。
 
 ---
 
-## 会话模型与运行关系
+## 公共字段
 
-### stable session（稳定链路）
+除 `GET /command/v1/status` 外，所有 POST 接口都需要以下表单字段：
 
-用于维持基础发送链路，包含：
-
-- DabMux
-- DabMod
-- HackRF
-
-这部分通常在服务启动时就拉起，属于全局基础能力。
-
-### active session（任务链路）
-
-用于按任务端口进行动态接入，包含：
-
-- PadEnc
-- Socat
-- AudioEnc
-
-每个 active session 与端口绑定，支持按端口单独启停和更新。
+- `request_id`
+- `group_id`
+- `callback_type`
+- `timestamp`
 
 ---
 
-## 更新与重启策略（非常关键）
+## 接口总览
 
-`dispatch` 的策略不是“仅更新内存参数”，而是“更新后按目标重启对应进程链路”。
+### Stable
 
-- 目标是 `ffmpeg`：更新后重启对应 FFmpeg guard（按 id 管理）
-- 目标是 stable 组件（dabmux/dabmod/hackrf）：更新后重启 stable session
-- 目标是 active 组件（audioenc/padenc/socat）：更新后重启该端口对应 active session
+- `POST /command/v1/stable/configure`
+- `POST /command/v1/stable/start`
+- `POST /command/v1/stable/stop`
 
-这能保证配置生效一致，但也意味着更新操作会触发短暂中断。
+### Active
 
----
+- `POST /command/v1/active/configure`
+- `POST /command/v1/active/start`
+- `POST /command/v1/active/stop`
 
-## 使用方式
+### FFmpeg
 
-### 1) 启动服务
+- `POST /command/v1/ffmpeg/configure`
+- `POST /command/v1/ffmpeg/start`
+- `POST /command/v1/ffmpeg/stop`
 
-- ODR Executor 应用入口是 `odr_executor_app`。
+### 全局
 
-### 2) 常用接口分组
-
-#### 会话控制
-
-- `POST /command/v1/apply` + `{"process": "stable"}`
-- `POST /command/v1/apply` + `{"process": "active", "selector": {"port": 5656}}`
-- `POST /command/v1/stop` + `{"process": "stable"}`
-- `POST /command/v1/stop` + `{"process": "active", "selector": {"port": 5656}}`
-- `POST /command/v1/stop` + `{"process": "all"}` 或 `POST /command/v1/stopall`
-
-#### 参数更新
-
-- `dabmux`：`POST /command/v1/apply`，`process=dabmux`，`config` 包含 `file_base64`
-- `dabmod` / `hackrf`：`POST /command/v1/apply`，`process` 对应组件，参数放 `config`
-- `audioenc` / `padenc` / `socat`：`POST /command/v1/apply`，`process` 对应组件，端口放 `selector.port`
-- `ffmpeg`：`POST /command/v1/apply`，`process=ffmpeg`，`selector.port` + `config.file_base64`
-
-### 3) 使用建议顺序
-
-1. 先确认会话已拉起（stable + 对应 active 端口）
-2. 再下发参数更新
-3. 观察进程重启日志，确认 apply 后运行稳定
-4. 对于 ffmpeg，按唯一 id 管理启动/停止
+- `POST /command/v1/all/stop`
+- `GET /command/v1/status`
 
 ---
 
-## 关键输入语义
+## 详细字段说明
 
-### 1) 端口语义
+### 1) `POST /command/v1/stable/configure`
 
-- `audioenc` / `padenc` / `socat` 更新都依赖端口路由到 active session
-- 端口不存在或未拉起时会返回错误
+配置 stable 参数（不启动进程）。
 
-### 2) 文件上传语义
+表单字段：
 
-- `dabmux` 与 `ffmpeg` 通过 `config.file_base64` 传输文件内容
-- 需要同时提供 `filename`、`content_type`（可选，系统有默认值）
+- 公共字段（必填）
+- `dabmod_mode`（默认 `1`）
+- `dabmod_format`（默认 `s8`）
+- `dabmod_gain`（默认 `0.8`）
+- `dabmod_gainmode`（默认 `max`）
+- `dabmod_rate`（默认 `2048000`）
+- `hackrf_freq_hz`（默认 `227360000`）
+- `hackrf_sample_rate_hz`（默认 `2048000`）
+- `hackrf_amp_enable`（默认 `1`）
+- `hackrf_gain_db_tx`（默认 `40`）
+- `dabmux_file`（可选上传文件）
 
-### 3) 默认值与自动补齐
+说明：
 
-- 多个组件具备默认参数（例如采样率、增益、路径）
-- `padenc` 会自动准备目录与默认 DLS 文件
-- 部分输入会在接口层和进程层双重校验
+- 如果不上传 `dabmux_file`，使用已有/默认 dabmux 配置。
 
----
+### 2) `POST /command/v1/stable/start`
 
-## 进程可靠性机制
+按当前配置启动 stable 三件套。
 
-`ProcessGuard` 提供以下稳定性保障：
+### 3) `POST /command/v1/stable/stop`
 
-- 子进程异常退出自动拉起
-- stdout/stderr 合并并实时写日志
-- 停止时先优雅退出，超时后强杀
-- 提供快照能力（状态、pid、重启次数）
-
----
-
-## 常见问题排查
-
-### 1) 更新成功但效果不生效
-
-优先检查：
-
-- 是否命中了正确 target
-- active 类型更新是否传了正确端口
-- 更新后是否确实触发了对应会话重启
-
-### 2) active 更新报端口无效
-
-优先检查：
-
-- 该端口 active session 是否已拉起
-- 端口是否被重复占用或已释放
-
-### 3) 进程频繁重启
-
-优先检查：
-
-- 参数是否越界（采样率、码率等）
-- FIFO / 文件路径是否可访问
-- 外部依赖命令是否可执行（odr-* / hackrf_transfer / socat / ffmpeg）
-
-### 4) 启停卡住或超时
-
-优先检查：
-
-- 子进程是否可被正常终止
-- 系统权限与资源占用
-- 相关 guard 的 `wait_until_stopped` 是否超时
+停止 stable 三件套。
 
 ---
 
-## 扩展建议
+### 4) `POST /command/v1/active/configure`
 
-新增一个受控进程时，建议遵循当前分层：
+按端口配置 active 会话（不启动）。
 
-1. 新增对应 Guard（命令解析 + 参数校验）
-2. 将 Guard 放入 stable 或 active session
-3. 在 `SessionManager.dispatch` 增加 target 路由与重启策略
-4. 在接口层扩展 `process` 分发逻辑和对应数据模型
+表单字段：
 
-这样可以保持“接口层、会话层、进程层”职责清晰，后续维护成本最低。
+- 公共字段（必填）
+- `port`（必填）
+- `output_port`（默认 `9000`）
+- `bitrate`（默认 `64`）
+- `sample_rate`（默认 `48000`）
+- `channels`（默认 `2`）
+- `format`（默认 `raw`）
+- `audio_gain`（默认 `0`）
+- `pad`（默认 `58`）
+- `padenc_sleep`（默认 `10`）
+- `padenc_image`（可选，单图片文件）
+- `padenc_archive`（可选，zip 文件）
+
+说明：
+
+- 上传图片或 zip 时，系统会把资源写入运行目录：
+  - `/tmp/odr_executor/uploads/padenc/{port}/slides`
+  - `/tmp/odr_executor/uploads/padenc/{port}/dls.txt`
+- 不上传图片/zip 时，`padenc` 使用默认行为（由进程侧自行补默认内容）。
+
+### 5) `POST /command/v1/active/start`
+
+按端口启动 active 会话。
+
+### 6) `POST /command/v1/active/stop`
+
+按端口停止 active 会话。
 
 ---
 
-## 维护建议
+### 7) `POST /command/v1/ffmpeg/configure`
 
-- 使用一致的 target 命名，避免路由歧义
-- 对每个 target 明确“更新后重启范围”
-- 参数默认值与接口文档保持同步
-- 将外部依赖命令安装检查纳入部署流程
-- 对关键会话（stable）优先保证可观测性和重启稳定性
+配置 ffmpeg 任务（不启动）。
+
+表单字段：
+
+- 公共字段（必填）
+- `port`（必填）
+- `file`（必填，音频文件）
+
+### 8) `POST /command/v1/ffmpeg/start`
+
+按端口启动 ffmpeg guard。
+
+### 9) `POST /command/v1/ffmpeg/stop`
+
+按端口停止 ffmpeg guard。
+
+---
+
+### 10) `POST /command/v1/all/stop`
+
+顺序停止：
+
+1. 所有 ffmpeg guards
+2. stable session
+3. 所有 active sessions
+
+超时时间使用服务端统一配置（当前为 `20s`）。
+
+### 11) `GET /command/v1/status`
+
+查询当前会话与 guard 运行状态快照。
+
+---
+
+## 推荐调用顺序
+
+### 启动完整链路
+
+1. `stable/configure`
+2. `stable/start`
+3. `active/configure`（port=5656）
+4. `active/start`（port=5656）
+5. `active/configure`（port=5657）
+6. `active/start`（port=5657）
+7. `ffmpeg/configure`（port=5656）
+8. `ffmpeg/start`（port=5656）
+9. `ffmpeg/configure`（port=5657）
+10. `ffmpeg/start`（port=5657）
+
+### 全量停止
+
+1. `all/stop`
+
+---
+
+## 重要约束
+
+- 不存在 `dabmux/start`、`padenc/start` 独立接口。
+- `dabmux` 配置属于 stable，会在 `stable/start` 生效。
+- `padenc` 配置属于 active，会在 `active/start`（对应端口）生效。
+- 新配置不会自动启动，必须显式调用 `start`。
+
+---
+
+## 常见问题
+
+### 1) 为什么 configure 成功但进程没起来？
+
+因为当前设计是两阶段，`configure` 只写配置，必须再调用 `start`。
+
+### 2) 为什么没有 dabmux/padenc 独立 start？
+
+它们分别绑定在 stable/active 会话内，由会话统一编排生命周期，避免链路不一致。
+
+### 3) 文档页里怎么传文件？
+
+在 FastAPI docs 中选择对应接口后：
+
+- 文件字段（`dabmux_file` / `padenc_image` / `padenc_archive` / `file`）可直接上传
+- 其余参数填写表单文本即可

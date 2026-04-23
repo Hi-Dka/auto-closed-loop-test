@@ -22,8 +22,15 @@ class DabMuxGuard(ProcessGuard):
         if cmd.get("filename"):
             advanced_config_path = f"/tmp/dabmux/{cmd['filename']}"
             os.makedirs("/tmp/dabmux", exist_ok=True)
-            with open(advanced_config_path, "w", encoding="utf-8") as f:
-                f.write(cmd["content"])
+
+            file_bytes = cmd.get("file_bytes")
+            if isinstance(file_bytes, (bytes, bytearray)):
+                with open(advanced_config_path, "wb") as f:
+                    f.write(file_bytes)
+            else:
+                content = cmd.get("content")
+                with open(advanced_config_path, "w", encoding="utf-8") as f:
+                    f.write(str(content or ""))
 
         cmd_list = self._base_cmd + [advanced_config_path]
 
