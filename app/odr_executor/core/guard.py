@@ -36,6 +36,42 @@ class ProcessGuard(ABC):
         self._allow_restart = True
         self._stop_event = threading.Event()
 
+    def _terminate_process(self, process: subprocess.Popen[str]) -> None:
+        target_pid = process.pid
+
+        if target_pid is not None and hasattr(os, "killpg"):
+            try:
+                os.killpg(target_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                self._log.debug("Process group already exited before SIGTERM.")
+            except OSError as exc:
+                self._log.debug(
+                    f"Failed to send SIGTERM to process group: {exc}. Falling back to terminate()."
+                )
+                process.terminate()
+        else:
+            process.terminate()
+
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            self._log.warning("Process failed to stop gracefully, killing it (SIGKILL)")
+
+            if target_pid is not None and hasattr(os, "killpg"):
+                try:
+                    os.killpg(target_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    self._log.debug("Process group already exited before SIGKILL.")
+                except OSError as exc:
+                    self._log.debug(
+                        f"Failed to send SIGKILL to process group: {exc}. Falling back to kill()."
+                    )
+                    process.kill()
+            else:
+                process.kill()
+
+            process.wait(timeout=3)
+
     def _log_reader(self, pipe: TextIO) -> None:
         try:
             with pipe:
@@ -68,6 +104,16 @@ class ProcessGuard(ABC):
                 ) as process:
                     self._process = process
                     self._lifecycle_state = GuardLifecycleState.RUNNING
+
+                    if self._stop_event.is_set() or not self._is_running:
+                        self._terminate_process(process)
+                        return_code = process.returncode
+                        self._process = None
+                        self._lifecycle_state = GuardLifecycleState.STOPPED
+                        self._log.info(
+                            f"process stopped manually, exit code: {return_code}"
+                        )
+                        break
 
                     stdout = process.stdout
                     if stdout is not None:
@@ -133,43 +179,7 @@ class ProcessGuard(ABC):
         self._lifecycle_state = GuardLifecycleState.STOPPING
 
         if self._process:
-            target_pid = self._process.pid
-
-            if target_pid is not None and hasattr(os, "killpg"):
-                try:
-                    os.killpg(target_pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    self._log.debug("Process group already exited before SIGTERM.")
-                except OSError as exc:
-                    self._log.debug(
-                        f"Failed to send SIGTERM to process group: {exc}. Falling back to terminate()."
-                    )
-                    self._process.terminate()
-            else:
-                self._process.terminate()
-
-            try:
-                self._process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self._log.warning(
-                    "Process failed to stop gracefully, killing it (SIGKILL)"
-                )
-
-                if target_pid is not None and hasattr(os, "killpg"):
-                    try:
-                        os.killpg(target_pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        self._log.debug("Process group already exited before SIGKILL.")
-                    except OSError as exc:
-                        self._log.debug(
-                            f"Failed to send SIGKILL to process group: {exc}. Falling back to kill()."
-                        )
-                        self._process.kill()
-                else:
-                    self._process.kill()
-
-                self._process.wait(timeout=3)
-
+            self._terminate_process(self._process)
             self._process = None
 
         if self._monitor_thread and self._monitor_thread.is_alive():

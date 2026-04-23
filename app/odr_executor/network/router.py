@@ -27,6 +27,8 @@ from app.odr_executor.network.data_model import (
 
 router = APIRouter(prefix="/command/v1", tags=["Odr-Tools Control"])
 
+STOP_ALL_TIMEOUT_SECONDS = 20.0
+
 
 class SessionManagerObj(Protocol):
     def dispatch(
@@ -348,9 +350,9 @@ async def stop_process(
 
     if isinstance(payload, StopAllRequest):
         try:
-            session_manager.stop_all_ffmpeg_guards(timeout=8.0)
-            session_manager.stop_stable_session()
-            session_manager.stop_all_active_sessions()
+            session_manager.stop_all_ffmpeg_guards(timeout=STOP_ALL_TIMEOUT_SECONDS)
+            session_manager.stop_stable_session(timeout=STOP_ALL_TIMEOUT_SECONDS)
+            session_manager.stop_all_active_sessions(timeout=STOP_ALL_TIMEOUT_SECONDS)
         except RuntimeError as exc:
             _handle_stop_failure(exc)
         return {**payload_data, "status": "success"}
@@ -390,9 +392,9 @@ async def stop_all(payload: Optional[BaseRequest] = None):
     payload_data = payload.model_dump() if payload else {}
     manager = _get_session_manager_response()
     try:
-        manager.stop_all_ffmpeg_guards(timeout=8.0)
-        manager.stop_stable_session()
-        manager.stop_all_active_sessions()
+        manager.stop_all_ffmpeg_guards(timeout=STOP_ALL_TIMEOUT_SECONDS)
+        manager.stop_stable_session(timeout=STOP_ALL_TIMEOUT_SECONDS)
+        manager.stop_all_active_sessions(timeout=STOP_ALL_TIMEOUT_SECONDS)
     except RuntimeError as exc:
         _handle_stop_failure(exc)
     return {**BaseRequest(**payload_data).model_dump(), "status": "success"}
