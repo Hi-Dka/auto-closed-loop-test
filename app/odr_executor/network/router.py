@@ -61,6 +61,7 @@ class SessionManagerObj(Protocol):
 
     def stop_ffmpeg_guards(self, port: int) -> bool: ...
     def stop_all_ffmpeg_guards(self, timeout: float = 8.0) -> bool: ...
+    def snapshot(self) -> dict[str, Any]: ...
 
 
 _response_state: Dict[str, SessionManagerObj | None] = {"manager": None}
@@ -378,3 +379,8 @@ async def stop_all(payload: Optional[BaseRequest] = None):
     _get_session_manager_response().stop_stable_session()
     _get_session_manager_response().stop_all_active_sessions()
     return {**BaseRequest(**payload_data).model_dump(), "status": "success"}
+
+
+@router.get("/status")
+async def get_status():
+    return {"status": "success", "data": _get_session_manager_response().snapshot()}

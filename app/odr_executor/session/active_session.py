@@ -31,6 +31,9 @@ class ActiveSession:
 
     def stop(self) -> None:
         self._log.info("stopping active session...")
+        self._audioenc_guard.disable_restart()
+        self._padenc_guard.disable_restart()
+        self._socat_guard.disable_restart()
         self._audioenc_guard.undeploy()
         self._padenc_guard.undeploy()
         self._socat_guard.undeploy()

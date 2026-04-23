@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 import copy
+from enum import Enum
 import os
 import signal
 import subprocess
@@ -9,6 +10,15 @@ from typing import Any, TextIO
 from collections.abc import Sequence
 
 from .logger import base_log, TaskLoggerAdapter
+
+
+class GuardLifecycleState(str, Enum):
+    STOPPED = "stopped"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    RESTARTING = "restarting"
+    FAILED = "failed"
 
 
 class ProcessGuard(ABC):
@@ -22,6 +32,8 @@ class ProcessGuard(ABC):
         self._cmd_dict: dict[str, Any] = {}
         self._monitor_thread: threading.Thread | None = None
         self._restart_count = 0
+        self._lifecycle_state: GuardLifecycleState = GuardLifecycleState.STOPPED
+        self._allow_restart = True
 
     def _log_reader(self, pipe: TextIO) -> None:
         try:
@@ -37,11 +49,13 @@ class ProcessGuard(ABC):
             if not self._cmd:
                 self._log.error("Engine command is empty, cannot start process.")
                 self._is_running = False
+                self._lifecycle_state = GuardLifecycleState.FAILED
                 return
 
             self._log.info(f"Engine command: {' '.join(self._cmd)}")
 
             try:
+                self._lifecycle_state = GuardLifecycleState.STARTING
                 with subprocess.Popen(
                     self._cmd,
                     stdout=subprocess.PIPE,
@@ -52,6 +66,7 @@ class ProcessGuard(ABC):
                     start_new_session=True,
                 ) as process:
                     self._process = process
+                    self._lifecycle_state = GuardLifecycleState.RUNNING
 
                     stdout = process.stdout
                     if stdout is not None:
@@ -62,13 +77,15 @@ class ProcessGuard(ABC):
 
                     return_code = process.wait()
 
-                if self._is_running:
+                if self._is_running and self._allow_restart:
                     self._restart_count += 1
+                    self._lifecycle_state = GuardLifecycleState.RESTARTING
                     self._log.warning(
                         f"process exited with code: {return_code}. Restarting..."
                     )
                     time.sleep(2)
                 else:
+                    self._lifecycle_state = GuardLifecycleState.STOPPED
                     self._log.info(
                         f"process stopped manually, exit code: {return_code}"
                     )
@@ -76,6 +93,7 @@ class ProcessGuard(ABC):
                 self._process = None
 
             except (OSError, subprocess.SubprocessError) as e:
+                self._lifecycle_state = GuardLifecycleState.FAILED
                 self._log.error(
                     f"process failed to start or encountered an error: {str(e)}"
                 )
@@ -90,6 +108,8 @@ class ProcessGuard(ABC):
 
         self._cmd = list(cmd_list)
         self._is_running = True
+        self._allow_restart = True
+        self._lifecycle_state = GuardLifecycleState.STARTING
         self._monitor_thread = threading.Thread(target=self._monitor, daemon=True)
         self._monitor_thread.start()
         self._log.info("ProcessGuard is starting...")
@@ -97,10 +117,13 @@ class ProcessGuard(ABC):
     def _stop_guard(self) -> None:
         if not self._is_running:
             self._log.warning("ProcessGuard is not running. Nothing to stop.")
+            self._lifecycle_state = GuardLifecycleState.STOPPED
             return
 
         self._log.info("ProcessGuard is stopping...")
         self._is_running = False
+        self._allow_restart = False
+        self._lifecycle_state = GuardLifecycleState.STOPPING
 
         if self._process:
             target_pid = self._process.pid
@@ -145,6 +168,7 @@ class ProcessGuard(ABC):
         if self._monitor_thread and self._monitor_thread.is_alive():
             self._monitor_thread.join(timeout=3.0)
 
+        self._lifecycle_state = GuardLifecycleState.STOPPED
         self._log.info("ProcessGuard has been stopped.")
 
     @abstractmethod
@@ -159,6 +183,9 @@ class ProcessGuard(ABC):
 
     def undeploy(self) -> None:
         self._stop_guard()
+
+    def disable_restart(self) -> None:
+        self._allow_restart = False
 
     def wait_until_stopped(
         self, timeout: float = 5.0, poll_interval: float = 0.1
@@ -183,11 +210,7 @@ class ProcessGuard(ABC):
 
     @property
     def status(self) -> str:
-        if not self._is_running:
-            return "stopped"
-        if self._process and self._process.poll() is None:
-            return "running"
-        return "restarting"
+        return self._lifecycle_state.value
 
     @property
     def pid(self) -> int | None:
@@ -202,6 +225,7 @@ class ProcessGuard(ABC):
     def snapshot(self) -> dict[str, Any]:
         return {
             "status": self.status,
+            "lifecycle_state": self.status,
             "pid": self.pid,
             "restart_count": self.restart_count,
             "command": self._cmd,

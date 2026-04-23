@@ -29,6 +29,9 @@ class StableSession:
     def stop(self) -> None:
         self._log.info("stopping stable session...")
 
-        self._dabmux_guard.undeploy()
-        self._dabmod_guard.undeploy()
+        self._hackrf_guard.disable_restart()
+        self._dabmod_guard.disable_restart()
+        self._dabmux_guard.disable_restart()
         self._hackrf_guard.undeploy()
+        self._dabmod_guard.undeploy()
+        self._dabmux_guard.undeploy()

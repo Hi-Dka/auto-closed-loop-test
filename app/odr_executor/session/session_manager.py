@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Optional
 
 from app.odr_executor.session.stable_session import StableSession
 from app.odr_executor.session.active_session import ActiveSession
@@ -34,6 +34,25 @@ class SessionManager:
     def has_ffmpeg_guard(self, port: int) -> bool:
         return port in self._ffmpeg_guard
 
+    def snapshot(self) -> dict[str, Any]:
+        stable = {guard.tag: guard.snapshot() for guard in self._stable_guards()}
+        active = {
+            str(port): {
+                guard.tag: guard.snapshot() for guard in self._active_guards(port)
+            }
+            for port in self._active_sessions.keys()
+        }
+        ffmpeg = {
+            str(port): guard.snapshot() for port, guard in self._ffmpeg_guard.items()
+        }
+
+        return {
+            "stable": stable,
+            "active": active,
+            "ffmpeg": ffmpeg,
+            "active_ports": sorted(list(self._active_ports)),
+        }
+
     def _summarize_command_data(self, data: dict) -> dict[str, object]:
         summary: dict[str, object] = {}
         for key, value in data.items():
@@ -58,11 +77,40 @@ class SessionManager:
 
         if not self.check_port(socat_port):
             self._log.error(f"Port {socat_port} is already in use.")
-            return None
+            raise RuntimeError(f"Port {socat_port} is already in use.")
 
         active_session = ActiveSession(str(socat_port), socat_port)
         active_session.launch()
         self._active_sessions[socat_port] = active_session
+
+    def _ensure_active_session(self, socat_port: int) -> ActiveSession:
+        session = self._active_sessions.get(socat_port)
+        if session is None:
+            self._log.info(
+                f"Active session for task {socat_port} not found, creating it before apply."
+            )
+            session = ActiveSession(str(socat_port), socat_port)
+            self._active_sessions[socat_port] = session
+        return session
+
+    def _restart_active_session(
+        self,
+        socat_port: int,
+        *,
+        is_new_session: bool,
+        timeout: float = 8.0,
+    ) -> None:
+        session = self._active_sessions[socat_port]
+        session.stop()
+        if not self._wait_active_stopped(socat_port, timeout=timeout):
+            raise RuntimeError(
+                f"Timed out waiting for active session {socat_port} to stop."
+            )
+
+        if is_new_session and not self.check_port(socat_port):
+            raise RuntimeError(f"Port {socat_port} is already in use.")
+
+        session.launch()
 
     def stop_active_session(
         self,
@@ -71,9 +119,6 @@ class SessionManager:
         wait: bool = True,
         timeout: float = 8.0,
     ) -> None:
-        if release_port:
-            self.release_port(socat_port)
-
         if socat_port in self._active_sessions:
             self._log.info(f"stopping active session for task {socat_port}...")
             self._active_sessions[socat_port].stop()
@@ -81,6 +126,8 @@ class SessionManager:
                 raise RuntimeError(
                     f"Timed out waiting for active session {socat_port} to stop."
                 )
+            if release_port:
+                self.release_port(socat_port)
         else:
             self._log.warning(f"active session for task {socat_port} not found.")
 
@@ -113,115 +160,79 @@ class SessionManager:
         self._log.info(f"applying active session for task {socat_port}...")
 
         is_new_session = socat_port not in self._active_sessions
-        if socat_port not in self._active_sessions:
-            self._log.info(
-                f"Active session for task {socat_port} not found, creating it before apply."
-            )
-            self._active_sessions[socat_port] = ActiveSession(
-                str(socat_port), socat_port
-            )
-
-        session = self._active_sessions[socat_port]
+        session = self._ensure_active_session(socat_port)
 
         session.apply(
             audioenc_data=audioenc_data,
             padenc_data=padenc_data,
             socat_data=socat_data,
         )
+        self._restart_active_session(socat_port, is_new_session=is_new_session)
 
-        session.stop()
-        if not self._wait_active_stopped(socat_port, timeout=8.0):
-            raise RuntimeError(
-                f"Timed out waiting for active session {socat_port} to stop."
+    def _dispatch_ffmpeg_update(self, data: dict, port: Optional[int]) -> bool:
+        if not port or port not in self._ffmpeg_guard:
+            self._log.error(f"Invalid port {port} for FFmpeg guard update.")
+            raise ValueError(f"Invalid port {port} for FFmpeg guard update.")
+
+        ffmpeg_port = int(port)
+        guard = self._ffmpeg_guard[ffmpeg_port]
+        if guard.command_equals(data):
+            self._log.info(
+                f"FFmpeg guard for port {ffmpeg_port} already has the same command, skipping restart."
             )
+            return True
 
-        if is_new_session and not self.check_port(socat_port):
-            raise RuntimeError(f"Port {socat_port} is already in use.")
+        guard.update_command(data)
+        self._log.info(
+            f"FFmpeg command updated, restarting guard on port {ffmpeg_port}..."
+        )
+        self._ffmpeg_guard[ffmpeg_port].deploy()
+        return True
 
-        session.launch()
+    def _dispatch_stable_update(self, target: str, data: dict) -> bool:
+        processor = getattr(self._stable_session, f"_{target}_guard", None)
+        if processor is None:
+            return False
+
+        processor.update_command(data)
+        self.stop_stable_session(wait=True, timeout=8.0)
+        self.launch_stable_session()
+        return True
+
+    def _dispatch_active_update(
+        self, target: str, data: dict, port: Optional[int]
+    ) -> bool:
+        if not port:
+            self._log.error(f"Invalid port {port} for target {target}.")
+            raise ValueError(f"Invalid port {port} for target {target}.")
+
+        is_new_session = port not in self._active_sessions
+        session = self._ensure_active_session(port)
+        processor = getattr(session, f"_{target}_guard", None)
+        if processor is None:
+            return False
+
+        processor.update_command(data)
+        self._restart_active_session(port, is_new_session=is_new_session)
+        return True
 
     def dispatch(self, target: str, data: dict, port: Optional[int] = None) -> None:
         self._log.info(
             f"Dispatching command to target: {target}, port: {port}, data: {self._summarize_command_data(data)}"
         )
 
-        is_update_cmd = False
-        is_stable_update = False
-        is_active_update = False
-        is_ffmpeg_update = False
-        is_new_session = False
-        ffmpeg_port: int | None = None
+        handled = False
 
         if target == "ffmpeg":
-            if not port or port not in self._ffmpeg_guard:
-                self._log.error(f"Invalid port {port} for FFmpeg guard update.")
-                raise ValueError(f"Invalid port {port} for FFmpeg guard update.")
+            handled = self._dispatch_ffmpeg_update(data=data, port=port)
+        elif target in ["dabmux", "dabmod", "hackrf"]:
+            handled = self._dispatch_stable_update(target=target, data=data)
+        elif target in ["audioenc", "padenc", "socat"]:
+            handled = self._dispatch_active_update(target=target, data=data, port=port)
 
-            ffmpeg_port = int(port)
-            guard = self._ffmpeg_guard[ffmpeg_port]
-            if guard.command_equals(data):
-                self._log.info(
-                    f"FFmpeg guard for port {ffmpeg_port} already has the same command, skipping restart."
-                )
-                return None
-
-            guard.update_command(data)
-            is_update_cmd = True
-            is_ffmpeg_update = True
-
-        if target in ["dabmux", "dabmod", "hackrf"]:
-            processor = getattr(self._stable_session, f"_{target}_guard", None)
-            if processor:
-                processor.update_command(data)
-                is_update_cmd = True
-                is_stable_update = True
-
-        if target in ["audioenc", "padenc", "socat"]:
-            if not port:
-                self._log.error(f"Invalid port {port} for target {target}.")
-                raise ValueError(f"Invalid port {port} for target {target}.")
-
-            is_new_session = port not in self._active_sessions
-            if port not in self._active_sessions:
-                self._log.info(
-                    f"Active session for port {port} not found, creating it before dispatch."
-                )
-                self._active_sessions[port] = ActiveSession(str(port), port)
-
-            session = self._active_sessions[port]
-            processor = getattr(session, f"_{target}_guard", None)
-            if processor:
-                processor.update_command(data)
-                is_update_cmd = True
-                is_active_update = True
-
-        if not is_update_cmd:
+        if not handled:
             self._log.error(f"Unknown target type: {target}")
             raise ValueError(f"Unknown target type: {target}")
-
-        if is_ffmpeg_update:
-            assert ffmpeg_port is not None
-            self._log.info(
-                f"FFmpeg command updated, restarting guard on port {ffmpeg_port}..."
-            )
-            self._ffmpeg_guard[ffmpeg_port].deploy()
-
-        if is_stable_update:
-            self.stop_stable_session(wait=True, timeout=8.0)
-            self.launch_stable_session()
-
-        if is_active_update and port is not None:
-            session = self._active_sessions[port]
-            session.stop()
-            if not self._wait_active_stopped(port, timeout=8.0):
-                raise RuntimeError(
-                    f"Timed out waiting for active session {port} to stop."
-                )
-
-            if is_new_session and not self.check_port(port):
-                raise RuntimeError(f"Port {port} is already in use.")
-
-            session.launch()
 
         self._log.info(f"Command dispatched successfully to {target} on port {port}.")
         return None
@@ -229,6 +240,7 @@ class SessionManager:
     def stop_ffmpeg_guards(self, port: int) -> bool:
         guard = self._ffmpeg_guard.get(port)
         if guard:
+            guard.disable_restart()
             guard.undeploy()
             guard.wait_until_stopped(timeout=8.0)
             del self._ffmpeg_guard[port]
@@ -247,6 +259,7 @@ class SessionManager:
             if guard is None:
                 continue
 
+            guard.disable_restart()
             guard.undeploy()
             if not guard.wait_until_stopped(timeout=timeout):
                 self._log.error(
