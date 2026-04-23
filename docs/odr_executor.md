@@ -124,6 +124,7 @@
 - `audio_gain`（默认 `0`）
 - `pad`（默认 `58`）
 - `padenc_sleep`（默认 `10`）
+- `padenc_dls_file`（可选，上传 DLS 文本文件）
 - `padenc_image`（可选，单图片文件）
 - `padenc_archive`（可选，zip 文件）
 
@@ -132,6 +133,7 @@
 - 上传图片或 zip 时，系统会把资源写入运行目录：
   - `/tmp/odr_executor/uploads/padenc/{port}/slides`
   - `/tmp/odr_executor/uploads/padenc/{port}/dls.txt`
+- 如果传了 `padenc_dls_file`，优先使用上传文件内容作为 DLS。
 - 不上传图片/zip 时，`padenc` 使用默认行为（由进程侧自行补默认内容）。
 
 ### 5) `POST /command/v1/active/start`
@@ -225,4 +227,5 @@
 在 FastAPI docs 中选择对应接口后：
 
 - 文件字段（`dabmux_file` / `padenc_image` / `padenc_archive` / `file`）可直接上传
+- 文件字段（`dabmux_file` / `padenc_image` / `padenc_archive` / `padenc_dls_file` / `file`）可直接上传
 - 其余参数填写表单文本即可

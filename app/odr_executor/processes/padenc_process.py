@@ -60,13 +60,13 @@ class PadEncGuard(ProcessGuard):
 
         if "dir" not in cmd:
             self._log.warning(
-                f"Directory not specified in new command, using default value: /config/padenc/slides-{self.tag}"
+                f"Directory not specified in new command, using default value: /media/padenc/sls-{self.tag}"
             )
             cmd["dir"] = f"/media/padenc/sls-{self.tag}"
 
         if "dls" not in cmd:
             self._log.warning(
-                f"DLS not specified in new command, using default value: /config/padenc/dls-{self.tag}/dls.txt"
+                f"DLS not specified in new command, using default value: /media/padenc/dls-{self.tag}/dls.txt"
             )
             cmd["dls"] = f"/media/padenc/dls-{self.tag}/dls.txt"
             os.makedirs(f"/media/padenc/dls-{self.tag}", exist_ok=True)

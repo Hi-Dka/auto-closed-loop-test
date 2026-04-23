@@ -264,6 +264,10 @@ async def configure_active(
     audio_gain: int = Form(0),
     pad: int = Form(58),
     padenc_sleep: int = Form(10),
+    padenc_dls_file: UploadFile | None = File(
+        default=None,
+        description="可选，DLS 文本文件上传（推荐 txt）",
+    ),
     padenc_image: UploadFile | None = File(
         default=None,
         description="可选，单图片文件上传（在 docs 中请使用文件选择器）",
@@ -282,9 +286,15 @@ async def configure_active(
 
     padenc_data: dict[str, Any] = {"sleep": padenc_sleep}
 
-    if padenc_image is not None or padenc_archive is not None:
+    if (
+        padenc_image is not None
+        or padenc_archive is not None
+        or padenc_dls_file is not None
+    ):
         slides_dir, dls_path = _padenc_runtime_paths(port)
-        _clear_directory(slides_dir)
+
+        if padenc_image is not None or padenc_archive is not None:
+            _clear_directory(slides_dir)
 
         if padenc_archive is not None:
             await _extract_zip_upload(padenc_archive, slides_dir)
@@ -293,8 +303,14 @@ async def configure_active(
             await _save_single_upload(padenc_image, slides_dir)
 
         dls_path.parent.mkdir(parents=True, exist_ok=True)
-        dls_path.write_text(f"PadEnc-{port}", encoding="utf-8")
-        padenc_data["dir"] = str(slides_dir)
+
+        if padenc_dls_file is not None:
+            dls_path.write_bytes(await _read_upload_bytes(padenc_dls_file))
+        elif not dls_path.exists():
+            dls_path.write_text(f"PadEnc-{port}", encoding="utf-8")
+
+        if padenc_image is not None or padenc_archive is not None:
+            padenc_data["dir"] = str(slides_dir)
         padenc_data["dls"] = str(dls_path)
 
     _get_session_manager_response().configure_active_session(
