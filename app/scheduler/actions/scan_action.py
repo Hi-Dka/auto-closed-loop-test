@@ -84,7 +84,7 @@ class ScanAction(TemplateAction[ScanParam]):
                 self._endpoint + "/scan",
                 timeout=5,
                 json={
-                    "background": True,
+                    "background": False,
                     "request_id": request_id,
                     "group_id": group_id,
                     "callback_type": self.callback_type,

@@ -211,7 +211,7 @@ class StartODRAction(TemplateAction[StartODRParam]):
                 data={
                     **necessary_data,
                     "port": 5656,
-                    "output_port": 9000,
+                    "output_port": 9001,
                     "bitrate": 64,
                     "sample_rate": 48000,
                     "channels": 2,
