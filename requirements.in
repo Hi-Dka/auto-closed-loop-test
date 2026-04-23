@@ -9,6 +9,7 @@ pillow
 
 # --- 网络请求 ---
 requests
+telnetlib3
 
 # --- 开发工具 ---
 pip-tools

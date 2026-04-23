@@ -144,16 +144,3 @@ async def handle_action(action: str, request: Request):
     scheduler.dispatch_callback(data, callback_type=action)
     return {"status": "ok"}
 
-
-@router.post("/upload/audio")
-async def handle_audio(request: Request):
-    raw_pcm = await request.body()
-    scheduler = _get_scheduler_target(request)
-    data = _normalize_callback_message(
-        {"type": "audio", "payload": raw_pcm}, callback_type="audio"
-    )
-    scheduler.dispatch_callback(
-        data,
-        callback_type="audio",
-    )
-    return {"status": "received"}

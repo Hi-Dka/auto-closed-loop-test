@@ -143,7 +143,6 @@ class TemplateAction(BaseAction[TParam]):
         self, phase: ActionPhase, callbacks: list[dict[str, Any]]
     ) -> bool: ...
 
-    """Validate the received callbacks for the given phase. By default, no additional validation is performed beyond what the completion policy enforces."""
 
     @property
     @abstractmethod

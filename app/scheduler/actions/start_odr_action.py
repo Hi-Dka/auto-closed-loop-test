@@ -35,6 +35,7 @@ class StartODRAction(TemplateAction[StartODRParam]):
     MIN_CALLBACKS_ON_TIMEOUT = 0
     HTTP_TIMEOUT_SECONDS = 5
     FFMPEG_HTTP_TIMEOUT_SECONDS = 30
+    STOP_HTTP_TIMEOUT_SECONDS = 20
 
     def __init__(self):
         super().__init__(StartODRParam)
@@ -53,6 +54,16 @@ class StartODRAction(TemplateAction[StartODRParam]):
 
     def build_phases(self) -> list[StartODRPhase]:
         return [
+            StartODRPhase(
+                name="stop-all-before-start",
+                send_count=self.SEND_COUNT,
+                completion_policy=self.EXPECT_POLICY,
+                request_id_validation_enabled=True,
+                timeout=self.phase_timeout_seconds,
+                timeout_behavior=self.TIMEOUT_BEHAVIOR,
+                min_callbacks_on_timeout=self.MIN_CALLBACKS_ON_TIMEOUT,
+                need_callback=False,
+            ),
             StartODRPhase(
                 name="start-stable-session",
                 send_count=self.SEND_COUNT,
@@ -88,7 +99,9 @@ class StartODRAction(TemplateAction[StartODRParam]):
     def dispatch_request(
         self, request_id: str, group_id: str, phase: StartODRPhase
     ) -> bool:
-        if phase.name == "start-stable-session":
+        if phase.name == "stop-all-before-start":
+            return self.post_stop_all(request_id, group_id, phase)
+        elif phase.name == "start-stable-session":
             return self.post_start_stable_session(request_id, group_id, phase)
         elif phase.name == "start-active-session":
             return self.post_start_active_session(request_id, group_id, phase)
@@ -99,6 +112,38 @@ class StartODRAction(TemplateAction[StartODRParam]):
             return False
 
     # ------------------------------ start odr tools ----------------------------- #
+    def post_stop_all(
+        self, request_id: str, group_id: str, phase: StartODRPhase
+    ) -> bool:
+        try:
+            necessary_data = {
+                "request_id": request_id,
+                "group_id": group_id,
+                "callback_type": self.callback_type,
+                "timestamp": time(),
+            }
+
+            log.info(
+                f"Posting phase '{phase.name}' with request_id={request_id}, group_id={group_id}"
+            )
+            response = requests.post(
+                self.start_endpoint + "/stop",
+                timeout=self.STOP_HTTP_TIMEOUT_SECONDS,
+                json={
+                    **necessary_data,
+                    "process": "all",
+                },
+            )
+            response.raise_for_status()
+            log.info(
+                f"Stop all POST response: {response.status_code} - {response.json()}"
+            )
+            sleep(1)
+            return True
+        except requests.RequestException as e:
+            log.error(f"Failed to post stop all before start: {e}")
+            return False
+
     def post_start_stable_session(
         self, request_id: str, group_id: str, phase: StartODRPhase
     ) -> bool:

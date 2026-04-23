@@ -1,4 +1,5 @@
 import os
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,6 +19,16 @@ from app.scheduler.network.router import (
 load_dotenv(dotenv_path=Path(__file__).resolve().parents[2] / ".env")
 
 log = TaskLoggerAdapter(base_log, {"tag": "SchedulerApp"})
+
+
+class _SuppressStatusAccessLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args or ()
+        args_text = " ".join(str(arg) for arg in args)
+        return "/control/v1/status" not in args_text
+
+
+logging.getLogger("uvicorn.access").addFilter(_SuppressStatusAccessLogFilter())
 
 DEFAULT_SCHEDULER_CONFIG_PATH = (
     Path(__file__).resolve().parents[2] / "config" / "scheduler" / "flows.yaml"

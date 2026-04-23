@@ -1,0 +1,4 @@
+action_class: "app.scheduler.actions.announcement_action.AnnouncementAction"
+callback_type: "announcement"
+config:
+  time_out: 60

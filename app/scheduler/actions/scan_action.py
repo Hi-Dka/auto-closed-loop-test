@@ -1,8 +1,9 @@
 import os
-import requests
 from time import time
 from typing import Any, Literal, Optional
 from uuid import uuid4
+
+import requests
 
 from app.scheduler.core.base_action import BaseParam, CompletionPolicy
 from app.scheduler.core.logger import base_log, TaskLoggerAdapter

@@ -1,0 +1,20 @@
+services:
+  odr-tools:
+    image: autoclosedlooptest:latest
+    container_name: auto_closed_loop_test
+    network_mode: host
+    privileged: true
+    volumes:
+      - ~/ODR-Tools/config:/config
+    devices:
+      - "/dev/bus/usb:/dev/bus/usb"
+    environment:
+      - TZ=Asia/Shanghai
+      - SCHEDULER_CONFIG_PATH=/app/config/scheduler/flows.yaml
+      - DABMUX_ADVANCED_CONFIG_PATH=/app/config/odr_executor/dabmux/advanced.mux
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "200m"
+        max-file: "3"
