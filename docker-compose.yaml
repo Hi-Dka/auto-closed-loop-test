@@ -1,6 +1,6 @@
 services:
   odr-tools:
-    image: autoclosedlooptest:latest
+    image: autoclosedlooptest:v1.0.0
     container_name: auto_closed_loop_test
     network_mode: host
     privileged: true

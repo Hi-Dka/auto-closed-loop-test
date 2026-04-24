@@ -255,7 +255,10 @@ async def configure_active(
     group_id: str = Form(...),
     callback_type: str = Form(...),
     timestamp: float = Form(...),
-    port: int = Form(...),
+    port: int = Form(
+        ...,
+        description="Required. Socat listening port; each active session must use a unique port to receive FFmpeg audio.",
+    ),
     output_port: int = Form(9000),
     bitrate: int = Form(64),
     sample_rate: int = Form(48000),
@@ -266,15 +269,15 @@ async def configure_active(
     padenc_sleep: int = Form(10),
     padenc_dls_file: UploadFile | None = File(
         default=None,
-        description="可选，DLS 文本文件上传（推荐 txt）",
+        description="Optional. Upload a DLS text file (txt recommended).",
     ),
     padenc_image: UploadFile | None = File(
         default=None,
-        description="可选，单图片文件上传（在 docs 中请使用文件选择器）",
+        description="Optional. Upload a single image file (use the file picker in docs).",
     ),
     padenc_archive: UploadFile | None = File(
         default=None,
-        description="可选，zip 压缩包上传（目录上传推荐使用此字段）",
+        description="Optional. Upload a zip archive (recommended for directory-like uploads).",
     ),
 ):
     payload_data = BaseRequest(
@@ -336,7 +339,10 @@ async def start_active(
     group_id: str = Form(...),
     callback_type: str = Form(...),
     timestamp: float = Form(...),
-    port: int = Form(...),
+    port: int = Form(
+        ...,
+        description="Required. Socat listening port; each active session must use a unique port to receive FFmpeg audio.",
+    ),
 ):
     payload_data = BaseRequest(
         request_id=request_id,
@@ -355,7 +361,7 @@ async def configure_ffmpeg(
     group_id: str = Form(...),
     callback_type: str = Form(...),
     timestamp: float = Form(...),
-    port: int = Form(...),
+    port: int = Form(..., description="Required. FFmpeg output destination port."),
     file: UploadFile = File(...),
 ):
     payload_data = BaseRequest(
@@ -383,7 +389,7 @@ async def start_ffmpeg(
     group_id: str = Form(...),
     callback_type: str = Form(...),
     timestamp: float = Form(...),
-    port: int = Form(...),
+    port: int = Form(..., description="Required. FFmpeg output destination port."),
 ):
     payload_data = BaseRequest(
         request_id=request_id,
