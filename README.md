@@ -63,8 +63,13 @@ python -m app.odr_executor.odr_executor
 项目已提供：
 
 - `Dockerfile`：构建运行镜像（包含 ODR 相关工具编译安装）
+``` bash
+docker build --pull --rm -f Dockerfile -t autoclosedlooptest:v1.0.0 . 
+```
 - `docker-compose.yaml`：启动容器（`host` 网络模式、USB 设备映射、配置文件挂载）
-
+``` bash 
+docker compose up -d
+```
 默认容器环境变量（节选）：
 
 - `SCHEDULER_CONFIG_PATH=/app/config/scheduler/flows.yaml`
